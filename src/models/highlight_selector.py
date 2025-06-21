@@ -518,57 +518,106 @@ class HighlightSelector:
             # Get diverse set of top images
             selected_df = self._select_diverse_highlights(metrics_df, count)
             
+            # Ensure highlight directory exists
+            os.makedirs(highlight_dir, exist_ok=True)
+            
             # Copy selected images to highlight directory
             log_message("Step 7: Copying selected highlight images...", progress=90)
             
             highlight_paths = []
+            copy_errors = 0
             
-            for _, row in selected_df.iterrows():
+            for idx, (_, row) in enumerate(selected_df.iterrows()):
                 source_path = row['path']
                 filename = row['filename']
                 dest_path = os.path.join(highlight_dir, filename)
                 
                 try:
+                    # Verify source file exists
+                    if not os.path.exists(source_path):
+                        log_message(f"ERROR: Source file not found: {source_path}")
+                        copy_errors += 1
+                        continue
+                        
+                    # Copy file
                     shutil.copy2(source_path, dest_path)
-                    highlight_paths.append(dest_path)
                     
-                    # Log selection with relevant metrics
-                    metrics_str = f"score: {row['combined_score']:.2f}, contrast: {row['contrast']:.2f}"
-                    
-                    # Add visibility info if available
-                    if 'visibility_category' in row and not self._pd.isna(row['visibility_category']):
-                        metrics_str += f", visibility: {row['visibility_category']}"
-                    
-                    # Add altitude info if available
-                    if 'altitude' in row and not self._pd.isna(row['altitude']):
-                        metrics_str += f", altitude: {row['altitude']:.2f}m"
-                    
-                    log_message(f"Selected highlight: {filename} ({metrics_str})")
+                    # Verify copy was successful
+                    if os.path.exists(dest_path):
+                        highlight_paths.append(dest_path)
+                        
+                        # Log selection with relevant metrics
+                        metrics_str = f"score: {row['combined_score']:.2f}, contrast: {row['contrast']:.2f}"
+                        
+                        # Add visibility info if available
+                        if 'visibility_category' in row and not self._pd.isna(row['visibility_category']):
+                            metrics_str += f", visibility: {row['visibility_category']}"
+                        
+                        # Add altitude info if available
+                        if 'altitude' in row and not self._pd.isna(row['altitude']):
+                            metrics_str += f", altitude: {row['altitude']:.2f}m"
+                        
+                        log_message(f"✓ Copied highlight {idx+1}/{len(selected_df)}: {filename} ({metrics_str})")
+                    else:
+                        log_message(f"ERROR: Failed to copy {filename} - destination file not found")
+                        copy_errors += 1
+                        
                 except Exception as e:
-                    log_message(f"Error copying {filename}: {e}")
+                    log_message(f"ERROR copying {filename}: {e}")
+                    copy_errors += 1
+                    
+            # Report copy results
+            if copy_errors > 0:
+                log_message(f"WARNING: {copy_errors} files failed to copy")
+            else:
+                log_message(f"✓ Successfully copied all {len(highlight_paths)} highlight images")
             
-            # Create HTML summary
+            if len(highlight_paths) == 0:
+                log_message("ERROR: No highlight images were successfully copied!")
+                return []
+            
+            # Create HTML summary with error handling
             log_message("Step 8: Creating HTML summary...", progress=95)
-            html_path = self._create_highlights_html(highlight_dir, selected_df, has_visibility_data)
+            try:
+                html_path = self._create_highlights_html(highlight_dir, selected_df, has_visibility_data)
+                if html_path and os.path.exists(html_path):
+                    log_message(f"✓ HTML summary created: {html_path}")
+                else:
+                    log_message("WARNING: Failed to create HTML summary")
+            except Exception as html_error:
+                log_message(f"ERROR creating HTML summary: {html_error}")
+                log_message(traceback.format_exc())
             
             # Create panel image with top 4 highlights
             log_message("Creating 4-panel summary image for reports...", progress=97)
-            panel_path = self.create_highlight_panel(highlight_dir, selected_df, top_count=4)
-            if panel_path:
-                log_message(f"✓ Created highlight panel image: {panel_path}", progress=98)
-            else:
-                log_message("Note: Could not create highlight panel image (matplotlib may be missing)", progress=98)
+            try:
+                panel_path = self.create_highlight_panel(highlight_dir, selected_df, top_count=4)
+                if panel_path and os.path.exists(panel_path):
+                    log_message(f"✓ Created highlight panel image: {panel_path}")
+                else:
+                    log_message("WARNING: Could not create highlight panel image (matplotlib may be missing)")
+            except Exception as panel_error:
+                log_message(f"ERROR creating panel image: {panel_error}")
+                log_message(traceback.format_exc())
             
-            log_message(f"Selected {len(highlight_paths)} highlight images. Saved to {highlight_dir}", progress=100)
-            log_message(f"HTML summary created: {html_path}", progress=100)
+            # Export metrics to CSV
+            try:
+                log_message("Exporting metrics to image_locations.csv...", progress=98)
+                if self.export_metrics_to_csv(output_folder, selected_df):
+                    log_message("✓ Metrics exported to CSV successfully")
+                else:
+                    log_message("WARNING: Failed to export metrics to CSV")
+            except Exception as csv_error:
+                log_message(f"ERROR exporting metrics to CSV: {csv_error}")
+                log_message(traceback.format_exc())
+            
+            log_message(f"✓ Selected {len(highlight_paths)} highlight images. Saved to {highlight_dir}", progress=100)
             
             return highlight_paths
             
         except Exception as e:
-            if progress_callback:
-                progress_callback(100, f"Error selecting highlight images: {e}")
-            print(f"Error selecting highlight images: {e}")
-            print(traceback.format_exc())
+            log_message(f"ERROR in highlight selection: {e}", progress=100)
+            log_message(traceback.format_exc())
             return []
     
     def _calculate_image_metrics(self, img_path: str) -> Dict[str, float]:
