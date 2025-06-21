@@ -2,34 +2,6 @@ import tkinter as tk
 import os
 import sys
 import traceback
-from typing import Optional
-
-def setup_tensorflow() -> Optional[str]:
-    """
-    Configure TensorFlow based on available hardware
-    Returns: Status message about TensorFlow configuration
-    """
-    try:
-        import tensorflow as tf
-        
-        # Prevent TensorFlow from allocating all GPU memory
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            for gpu in gpus:
-                try:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-                    print(f"\nEnabled memory growth for GPU: {gpu}")
-                except RuntimeError as e:
-                    print(f"\nError configuring GPU {gpu}: {e}")
-            
-            return f"TensorFlow {tf.__version__} initialized with GPU support ({len(gpus)} GPU(s) available)"
-        else:
-            return f"TensorFlow {tf.__version__} initialized (CPU only)"
-            
-    except ImportError:
-        return "TensorFlow not available - visibility analysis will be disabled"
-    except Exception as e:
-        return f"Error initializing TensorFlow: {str(e)}"
 
 def show_error_window(root, error_message):
     """Display an error window with the given message"""
@@ -61,10 +33,6 @@ def main():
             print(f"Unhandled exception: {error_msg}")
             
         sys.excepthook = exception_hook
-        
-        # Configure TensorFlow before creating the window
-        tf_status = setup_tensorflow()
-        print(f"\nTensorFlow Status: {tf_status}")
         
         # Create the root window before any imports that might use tkinter
         root = tk.Tk()
