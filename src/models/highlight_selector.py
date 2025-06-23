@@ -115,9 +115,12 @@ class HighlightSelector:
             
             # Setup logging function
             def log_message(msg, progress=None):
-                print(msg)
+                print(f"HighlightSelector: {msg}")
                 if progress_callback and progress is not None:
-                    progress_callback(progress, msg)
+                    try:
+                        progress_callback(progress, msg)
+                    except Exception:
+                        pass  # Ignore progress callback errors
             
             # If no visibility results were provided, try to find them in the output folder
             if visibility_results is None:
@@ -149,27 +152,18 @@ class HighlightSelector:
                                 'analyzed_images': []
                             }
                             
-                            # Extract data from each row - handle different column naming conventions
-                            confidence_col = next((col for col in ['confidence', 'conf'] if col in vis_df.columns), None)
-                            visibility_col = next((col for col in ['visibility', 'category', 'vis_category'] if col in vis_df.columns), None)
-                            
-                            if visibility_col and confidence_col:
-                                for _, row in vis_df.iterrows():
-                                    result = {
-                                        'image': os.path.basename(row['image']),  # Ensure basename only
-                                        'visibility': row[visibility_col],
-                                        'confidence': row[confidence_col]
-                                    }
-                                    
-                                    # Add altitude if available
-                                    if 'altitude' in row:
-                                        result['altitude'] = row['altitude']
-                                        
-                                    visibility_results['analyzed_images'].append(result)
+                            # Extract data from each row
+                            for _, row in vis_df.iterrows():
+                                result = {
+                                    'image': row['image'],
+                                    'visibility': row.get('visibility', 'unknown'),
+                                    'confidence': row.get('confidence', 0.0)
+                                }
+                                visibility_results['analyzed_images'].append(result)
                                 
-                                log_message(f"Found existing visibility analysis for {len(visibility_results['analyzed_images'])} images", progress=6)
-                            else:
-                                log_message("Found visibility results file but missing required columns", progress=6)
+                            log_message(f"Found existing visibility analysis for {len(visibility_results['analyzed_images'])} images", progress=6)
+                        else:
+                            log_message("Found visibility results file but missing required columns", progress=6)
                 
                 except Exception as e:
                     log_message(f"Could not load existing visibility results: {e}", progress=6)
@@ -185,88 +179,92 @@ class HighlightSelector:
             visibility_map = {}
             has_visibility_data = False
             
-            # Step 1: Find all image files in the input folder
+            # STEP 1: Find all images
             log_message("Step 1: Finding all images in dataset...", progress=15)
             
             all_image_paths = []
-            for root, _, files in os.walk(input_folder):
+            image_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+            
+            # First, try the input_folder directly
+            log_message(f"Scanning for images in: {input_folder}")
+            
+            if not os.path.exists(input_folder):
+                log_message(f"ERROR: Input folder does not exist: {input_folder}")
+                return []
+            
+            # Scan for images in the input folder and all subdirectories
+            for root, dirs, files in os.walk(input_folder):
                 for file in files:
-                    if file.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff')):
-                        # Skip raw images
-                        if "raw" not in root.lower() and "raw" not in file.lower():
-                            full_path = os.path.join(root, file)
-                            all_image_paths.append(full_path)
+                    if file.lower().endswith(image_extensions):
+                        # Don't skip raw images anymore - include ALL images for selection
+                        full_path = os.path.join(root, file)
+                        all_image_paths.append(full_path)
             
             log_message(f"Found {len(all_image_paths)} images in dataset", progress=20)
             
+            # If we found no images in input_folder, try alternative scanning
             if len(all_image_paths) == 0:
-                log_message("No images found in the input folder", progress=100)
+                log_message("No images found in primary input folder, trying alternative locations...", progress=21)
+                
+                # Try parent directory
+                parent_dir = os.path.dirname(input_folder)
+                log_message(f"Trying parent directory: {parent_dir}")
+                
+                for root, dirs, files in os.walk(parent_dir):
+                    # Skip the output folder itself
+                    if root == output_folder:
+                        continue
+                    for file in files:
+                        if file.lower().endswith(image_extensions):
+                            full_path = os.path.join(root, file)
+                            all_image_paths.append(full_path)
+                
+                log_message(f"After alternative scanning: Found {len(all_image_paths)} images", progress=22)
+            
+            if len(all_image_paths) == 0:
+                log_message("No images found in any location", progress=100)
                 return []
             
-            # Step 2: Load altitude data if available
-            altitude_map = {}
-            has_altitude_data = False
-            
-            if altitude_threshold is not None:
-                log_message(f"Step 2: Loading altitude data (threshold: {altitude_threshold}m)...", progress=25)
+            # Step 2: Filter by altitude if altitude data is available
+            if altitude_threshold is not None or min_altitude_threshold is not None:
+                log_message("Step 2: Filtering images by altitude...", progress=25)
+                
+                # Load altitude data from CSV if available
+                altitude_map = {}
                 try:
                     csv_path = os.path.join(output_folder, "image_locations.csv")
                     if os.path.exists(csv_path):
                         df = self._pd.read_csv(csv_path)
-                        
                         if 'filename' in df.columns and 'altitude' in df.columns:
                             for _, row in df.iterrows():
                                 filename = os.path.basename(row['filename'])
                                 altitude_map[filename] = row['altitude']
-                            has_altitude_data = True
-                            
-                            log_message(f"Found altitude data for {len(altitude_map)} images", progress=30)
+                            log_message(f"Loaded altitude data for {len(altitude_map)} images")
                 except Exception as e:
-                    log_message(f"Error loading altitude data: {e}", progress=30)
-                    # Continue without altitude data
-            
-            # Check altitude data distribution
-            if has_altitude_data:
-                altitudes = list(altitude_map.values())
-                log_message(f"Altitude stats: min={min(altitudes):.2f}m, max={max(altitudes):.2f}m, mean={sum(altitudes)/len(altitudes):.2f}m", progress=31)
+                    log_message(f"Could not load altitude data: {e}")
                 
-                # Check for suspicious values (too many zeros)
-                zero_count = sum(1 for a in altitudes if a == 0.0)
-                if zero_count > len(altitudes) * 0.5:  # If more than 50% are zero
-                    log_message(f"Warning: {zero_count} of {len(altitudes)} altitudes are exactly zero. Data may be incorrect.", progress=32)
-            
-            # Step 3: Filter by altitude if threshold is provided
-            if altitude_threshold is not None and has_altitude_data:
-                log_message(f"Step 3: Filtering images by altitude threshold ({min_altitude_threshold}m - {altitude_threshold}m)...", progress=35)
-                
-                filtered_images = []
-                filtered_too_high = 0
-                filtered_too_low = 0
-                
-                for img_path in all_image_paths:
-                    filename = os.path.basename(img_path)
-                    if filename in altitude_map:
-                        altitude = altitude_map[filename]
-                        if min_altitude_threshold <= altitude <= altitude_threshold:
-                            filtered_images.append(img_path)
-                        elif altitude > altitude_threshold:
-                            filtered_too_high += 1
-                        else:
-                            filtered_too_low += 1
-                    else:
-                        # Include if no altitude data
-                        filtered_images.append(img_path)
-                
-                log_message(f"Filtered out {filtered_too_high} images above {altitude_threshold}m threshold", progress=37)
-                log_message(f"Filtered out {filtered_too_low} images below {min_altitude_threshold}m threshold", progress=38)
-                log_message(f"Selected {len(filtered_images)} of {len(all_image_paths)} images within altitude range", progress=40)
-                all_image_paths = filtered_images
+                # Filter images by altitude
+                if altitude_map:
+                    filtered_images = []
+                    for img_path in all_image_paths:
+                        filename = os.path.basename(img_path)
+                        if filename in altitude_map:
+                            altitude = altitude_map[filename]
+                            # Check altitude thresholds
+                            passes_max = altitude_threshold is None or altitude <= altitude_threshold
+                            passes_min = min_altitude_threshold is None or altitude >= min_altitude_threshold
+                            
+                            if passes_max and passes_min:
+                                filtered_images.append(img_path)
+                    
+                    log_message(f"Selected {len(filtered_images)} of {len(all_image_paths)} images within altitude range", progress=40)
+                    all_image_paths = filtered_images
             
             log_message(f"After filtering: {len(all_image_paths)} images remain")
             
-            # Step 4: Check for visibility analysis results
+            # Step 3: Check for visibility analysis results
             if visibility_results:
-                log_message("Step 4: Integrating visibility analysis results...", progress=45)
+                log_message("Step 3: Integrating visibility analysis results...", progress=45)
                 source = "current session" if progress_callback else "previous analysis"
                 
                 try:
@@ -284,124 +282,65 @@ class HighlightSelector:
                 except Exception as e:
                     log_message(f"Error integrating visibility results: {e}", progress=50)
             else:
-                log_message("Step 4: No visibility analysis results available", progress=45)
+                log_message("Step 3: No visibility analysis results available", progress=45)
             
-            # Decide whether to use existing metrics or calculate new ones
-            if not existing_metrics_df.empty and len(existing_metrics_df) >= len(all_image_paths) * 0.75:  # If we have metrics for at least 75% of images
-                log_message(f"Using {len(existing_metrics_df)} existing metrics from image_locations.csv", progress=55)
-                metrics_df = existing_metrics_df
+            # Step 4: Check for existing metrics and decide whether to use them or calculate new ones
+            has_sufficient_metrics = False
+            if not existing_metrics_df.empty:
+                # Check if we have metrics for a reasonable percentage of our images
+                existing_filenames = set(existing_metrics_df['filename'].apply(os.path.basename))
+                current_filenames = set(os.path.basename(path) for path in all_image_paths)
+                overlap_count = len(existing_filenames.intersection(current_filenames))
+                coverage_percentage = overlap_count / len(current_filenames) if current_filenames else 0
                 
-                # We still need to add visibility data if it wasn't in the CSV
-                if has_visibility_data:
-                    log_message("Adding visibility data to existing metrics...", progress=60)
-                    for i, row in metrics_df.iterrows():
-                        filename = row['filename']
-                        if filename in visibility_map and 'visibility_score' not in metrics_df.columns:
-                            vis_data = visibility_map[filename]
-                            metrics_df.at[i, 'visibility_category'] = vis_data['category']
-                            metrics_df.at[i, 'visibility_confidence'] = vis_data['confidence']
-                            
-                            # Calculate visibility score
-                            vis_category_score = 0.0
-                            if vis_data['category'] == 'great_visibility':
-                                vis_category_score = 1.0
-                            elif vis_data['category'] == 'good_visibility':
-                                vis_category_score = 0.75
-                            elif vis_data['category'] == 'low_visibility':
-                                vis_category_score = 0.3
-                            
-                            metrics_df.at[i, 'visibility_score'] = vis_category_score * vis_data['confidence']
+                log_message(f"Found existing metrics for {overlap_count}/{len(current_filenames)} images ({coverage_percentage:.1%} coverage)")
                 
-                # Skip to the selection phase
-                log_message("Using existing metrics, skipping to scoring phase", progress=65)
+                # Use existing metrics if we have good coverage (>= 75%)
+                if coverage_percentage >= 0.75:
+                    has_sufficient_metrics = True
+                    log_message(f"Using existing metrics (sufficient coverage)", progress=55)
+                    metrics_df = existing_metrics_df
+                    
+                    # Filter to only include images we found
+                    metrics_df = metrics_df[metrics_df['filename'].apply(os.path.basename).isin(current_filenames)]
+                    
+                    # Add visibility data if available and not already present
+                    if has_visibility_data and 'visibility_score' not in metrics_df.columns:
+                        log_message("Adding visibility data to existing metrics...", progress=60)
+                        for i, row in metrics_df.iterrows():
+                            filename = os.path.basename(row['filename'])
+                            if filename in visibility_map:
+                                vis_data = visibility_map[filename]
+                                metrics_df.at[i, 'visibility_category'] = vis_data['category']
+                                metrics_df.at[i, 'visibility_confidence'] = vis_data['confidence']
+                                
+                                # Calculate visibility score
+                                vis_category_score = 0.0
+                                if vis_data['category'] == 'great_visibility':
+                                    vis_category_score = 1.0
+                                elif vis_data['category'] == 'good_visibility':
+                                    vis_category_score = 0.75
+                                elif vis_data['category'] == 'low_visibility':
+                                    vis_category_score = 0.3
+                                
+                                metrics_df.at[i, 'visibility_score'] = vis_category_score * vis_data['confidence']
+            
+            # Step 5: Calculate metrics if we don't have sufficient existing ones
+            if not has_sufficient_metrics:
+                log_message(f"Calculating metrics for {len(all_image_paths)} images...", progress=50)
                 
-            else:
-                # Process ALL images regardless of dataset size
-                log_message(f"Processing all {len(all_image_paths)} images in the dataset", progress=45)
-
-                # Just a note about large datasets to inform the user
-                if len(all_image_paths) > 1000:
-                    log_message(f"Large dataset detected with {len(all_image_paths)} images - this may take some time", progress=46)
-                    if len(all_image_paths) > 5000:
-                        log_message(f"Very large dataset ({len(all_image_paths)} images) - using parallel processing", progress=47)
-                
-                # Step 5: Calculate metrics for each image using parallel processing if dataset is large
-                log_message("Step 5: Calculating image metrics...", progress=55)
-
-                # Determine if we should use parallel processing based on dataset size
-                use_parallel = len(all_image_paths) >= 100  # Use parallel for datasets with 100+ images
-
-                if use_parallel:
-                    # Import multiprocessing locally to avoid potential pickle issues
-                    import multiprocessing
-                    from concurrent.futures import ThreadPoolExecutor
-                    
-                    # Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid pickle issues
-                    # ThreadPoolExecutor is still much faster than serial processing and doesn't have pickle issues
-                    num_cores = multiprocessing.cpu_count()
-                    num_workers = max(1, min(num_cores - 1, 8))  # Use at most 8 workers, leave one core free
-                    
-                    log_message(f"Using parallel processing with {num_workers} workers", progress=56)
-                    
-                    # Calculate batch size - smaller batches for more frequent progress updates
-                    batch_size = max(10, len(all_image_paths) // (num_workers * 10))
-                    
-                    # Create batches
-                    batches = []
-                    for i in range(0, len(all_image_paths), batch_size):
-                        batch = all_image_paths[i:i + batch_size]
-                        batches.append(batch)
-                    
-                    log_message(f"Processing {len(batches)} batches of approximately {batch_size} images each", progress=57)
-                    
-                    # Track progress
-                    processed_images = 0
-                    image_metrics = []
-                    
-                    # Process batches using ThreadPoolExecutor
-                    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                        # Submit all batch tasks
-                        batch_futures = []
-                        for batch in batches:
-                            future = executor.submit(self._process_batch_in_thread, batch, altitude_map, visibility_map, has_visibility_data)
-                            batch_futures.append(future)
+                # Process images for metrics
+                image_metrics = []
+                for i, img_path in enumerate(all_image_paths):
+                    try:
+                        # Calculate basic metrics
+                        metrics = self.calculate_image_metrics(img_path)
                         
-                        # Process results as they complete
-                        for i, future in enumerate(as_completed(batch_futures)):
-                            try:
-                                batch_results = future.result()
-                                image_metrics.extend(batch_results)
-                                
-                                # Update progress
-                                processed_images += len(batch_results)
-                                progress_value = 60 + int((processed_images / len(all_image_paths)) * 25)
-                                log_message(f"Processed {processed_images}/{len(all_image_paths)} images", progress=progress_value)
-                                
-                            except Exception as e:
-                                log_message(f"Error processing batch: {e}", progress=60)
-                else:
-                    # Simple single-process approach for smaller datasets
-                    log_message("Processing images sequentially", progress=56)
-                    
-                    # Process directly
-                    image_metrics = []
-                    total_images = len(all_image_paths)
-                    
-                    for i, img_path in enumerate(all_image_paths):
-                        try:
-                            # Update progress periodically
-                            if i % 10 == 0 or i == total_images - 1:
-                                progress_value = 55 + int((i / total_images) * 30)
-                                log_message(f"Processing image {i+1}/{total_images}", progress=progress_value)
-                            
-                            # Calculate metrics
-                            metrics = self._calculate_image_metrics(img_path)
-                            
-                            # Add metadata
+                        if metrics:
                             filename = os.path.basename(img_path)
                             
                             # Get altitude if available
-                            if altitude_map and filename in altitude_map:
+                            if 'altitude_map' in locals() and altitude_map and filename in altitude_map:
                                 metrics['altitude'] = altitude_map[filename]
                             
                             # Get visibility data if available
@@ -428,74 +367,62 @@ class HighlightSelector:
                             
                             image_metrics.append(metrics)
                             
-                        except Exception as e:
-                            log_message(f"Error processing {img_path}: {e}")
+                        # Update progress periodically
+                        if progress_callback and (i % 100 == 0 or i == len(all_image_paths) - 1):
+                            progress = 50 + int((i / len(all_image_paths)) * 35)  # Progress from 50% to 85%
+                            log_message(f"Processed {i+1}/{len(all_image_paths)} images", progress=progress)
+                            
+                    except Exception as e:
+                        log_message(f"Error processing {img_path}: {e}")
 
-                log_message(f"After metrics calculation: {len(image_metrics)} valid images")
                 log_message(f"Calculated metrics for {len(image_metrics)} images", progress=85)
                 
                 # Convert to DataFrame for easier filtering and sorting
                 metrics_df = self._pd.DataFrame(image_metrics)
                 
-                # Check if we have any metrics
-                if len(metrics_df) == 0:
-                    log_message("No valid images found with proper metrics", progress=90)
-                    return []
+                # Export metrics to CSV for future use
+                try:
+                    self.export_metrics_to_csv(output_folder, metrics_df)
+                    log_message("Exported calculated metrics to CSV for future use")
+                except Exception as e:
+                    log_message(f"Warning: Could not save metrics to CSV: {e}")
+            
+            # Check if we have any metrics
+            if len(metrics_df) == 0:
+                log_message("No valid images found with proper metrics", progress=90)
+                return []
+            
+            # Step 6: Calculate combined scores and select highlights
+            log_message("Calculating combined scores for image selection...", progress=87)
+            
+            # Weights for different metrics (can be adjusted)
+            contrast_weight = 0.3
+            texture_weight = 0.3
+            color_weight = 0.2
+            entropy_weight = 0.2
+            visibility_weight = 1.0  # Visibility gets full weight if available
+            
+            combined_scores = []
+            for _, row in metrics_df.iterrows():
+                score = 0.0
                 
-                # Check if required columns exist
-                required_columns = ['contrast', 'texture', 'color_variance', 'entropy']
-                missing_columns = [col for col in required_columns if col not in metrics_df.columns]
-                if missing_columns:
-                    log_message(f"Error: Missing required metrics columns: {', '.join(missing_columns)}", progress=88)
-                    
-                    # Add missing columns with default values
-                    for col in missing_columns:
-                        metrics_df[col] = 0.0
-                    log_message("Added missing columns with default values", progress=89)
-            
-            # Step 6: Score and select top images
-            log_message("Step 6: Scoring and selecting top images...", progress=87)
-            
-            # Calculate combined score based on metrics if needed
-            if 'combined_score' not in metrics_df.columns:
-                def calculate_combined_score(row):
-                    # Base metrics score - only use image quality metrics
-                    metrics_score = (
-                        row['contrast'] * self.metrics_weight['contrast'] +
-                        row['texture'] * self.metrics_weight['texture'] +
-                        row['color_variance'] * self.metrics_weight['color_variance'] +
-                        row['entropy'] * self.metrics_weight['entropy']
-                    )
-                    
-                    # Add visibility score if available
-                    if has_visibility_data and 'visibility_score' in row and not self._pd.isna(row['visibility_score']):
-                        # Combine with visibility score
-                        return (metrics_score * (1 - self.metrics_weight['visibility']) + 
-                               row['visibility_score'] * self.metrics_weight['visibility'])
-                    else:
-                        # Just use metrics score
-                        return metrics_score
+                # Add metric scores
+                score += contrast_weight * row.get('contrast', 0)
+                score += texture_weight * row.get('texture', 0) 
+                score += color_weight * row.get('color_variance', 0)
+                score += entropy_weight * row.get('entropy', 0)
                 
-                # Add combined score column
-                metrics_df['combined_score'] = metrics_df.apply(calculate_combined_score, axis=1)
+                # Add visibility score if available
+                if row.get('visibility_score') is not None:
+                    score += visibility_weight * row.get('visibility_score', 0)
+                
+                combined_scores.append(score)
             
-            # Export metrics to CSV if we calculated new ones
-            if not existing_metrics_df.empty:
-                log_message("Using existing metrics from CSV", progress=88)
-            else:
-                log_message("Exporting metrics to image_locations.csv...", progress=88)
-                self.export_metrics_to_csv(output_folder, metrics_df)
+            metrics_df['combined_score'] = combined_scores
             
-            # Print statistics to help debug
-            print(f"Score statistics: min={metrics_df['combined_score'].min():.3f}, "
-                  f"max={metrics_df['combined_score'].max():.3f}, "
-                  f"mean={metrics_df['combined_score'].mean():.3f}")
-            print(f"Images with non-zero scores: {(metrics_df['combined_score'] > 0).sum()} of {len(metrics_df)}")
-
-            if (metrics_df['combined_score'] > 0).sum() == 0:
-                print("WARNING: All images have zero scores. Check metric calculation.")
-
-            log_message(f"Images with combined_score > 0: {len(metrics_df[metrics_df['combined_score'] > 0])}")
+            # Debug info
+            log_message(f"Combined scores calculated. Range: {min(combined_scores):.3f} to {max(combined_scores):.3f}, "
+                       f"mean={metrics_df['combined_score'].mean():.3f}")
             
             # Filter out zero_visibility images if we have visibility data
             if has_visibility_data:
@@ -515,109 +442,55 @@ class HighlightSelector:
             # Sort by combined score
             metrics_df = metrics_df.sort_values('combined_score', ascending=False)
             
-            # Get diverse set of top images
-            selected_df = self._select_diverse_highlights(metrics_df, count)
+            # Select top images
+            selected_count = min(count, len(metrics_df))
+            top_images = metrics_df.head(selected_count)
             
-            # Ensure highlight directory exists
-            os.makedirs(highlight_dir, exist_ok=True)
+            log_message(f"Selected top {selected_count} images based on combined scores", progress=90)
             
             # Copy selected images to highlight directory
-            log_message("Step 7: Copying selected highlight images...", progress=90)
-            
             highlight_paths = []
-            copy_errors = 0
-            
-            for idx, (_, row) in enumerate(selected_df.iterrows()):
-                source_path = row['path']
-                filename = row['filename']
-                dest_path = os.path.join(highlight_dir, filename)
-                
+            for i, (_, row) in enumerate(top_images.iterrows()):
                 try:
-                    # Verify source file exists
-                    if not os.path.exists(source_path):
-                        log_message(f"ERROR: Source file not found: {source_path}")
-                        copy_errors += 1
-                        continue
-                        
-                    # Copy file
-                    shutil.copy2(source_path, dest_path)
+                    src_path = row['path']
+                    filename = row['filename']
+                    dest_path = os.path.join(highlight_dir, filename)
                     
-                    # Verify copy was successful
-                    if os.path.exists(dest_path):
-                        highlight_paths.append(dest_path)
-                        
-                        # Log selection with relevant metrics
-                        metrics_str = f"score: {row['combined_score']:.2f}, contrast: {row['contrast']:.2f}"
-                        
-                        # Add visibility info if available
-                        if 'visibility_category' in row and not self._pd.isna(row['visibility_category']):
-                            metrics_str += f", visibility: {row['visibility_category']}"
-                        
-                        # Add altitude info if available
-                        if 'altitude' in row and not self._pd.isna(row['altitude']):
-                            metrics_str += f", altitude: {row['altitude']:.2f}m"
-                        
-                        log_message(f"✓ Copied highlight {idx+1}/{len(selected_df)}: {filename} ({metrics_str})")
-                    else:
-                        log_message(f"ERROR: Failed to copy {filename} - destination file not found")
-                        copy_errors += 1
-                        
+                    import shutil
+                    shutil.copy2(src_path, dest_path)
+                    highlight_paths.append(dest_path)
+                    
+                    log_message(f"✓ Copied highlight {i+1}/{selected_count}: {filename}")
+                    
                 except Exception as e:
                     log_message(f"ERROR copying {filename}: {e}")
-                    copy_errors += 1
-                    
-            # Report copy results
-            if copy_errors > 0:
-                log_message(f"WARNING: {copy_errors} files failed to copy")
+            
+            if len(highlight_paths) > 0:
+                # Create HTML gallery
+                try:
+                    has_visibility = 'visibility_category' in top_images.columns
+                    html_path = self._create_highlights_html(highlight_dir, top_images, has_visibility)
+                    log_message(f"Created highlights gallery: {os.path.basename(html_path)}")
+                except Exception as e:
+                    log_message(f"Warning: Could not create HTML gallery: {e}")
+                
+                # Create highlight panel
+                try:
+                    panel_path = self.create_highlight_panel(highlight_dir, top_images, top_count=4)
+                    if panel_path:
+                        log_message(f"Created highlight panel: {os.path.basename(panel_path)}")
+                except Exception as e:
+                    log_message(f"Warning: Could not create highlight panel: {e}")
+                
+                log_message(f"✓ Selected {len(highlight_paths)} highlight images. Saved to {highlight_dir}", progress=100)
             else:
-                log_message(f"✓ Successfully copied all {len(highlight_paths)} highlight images")
-            
-            if len(highlight_paths) == 0:
-                log_message("ERROR: No highlight images were successfully copied!")
-                return []
-            
-            # Create HTML summary with error handling
-            log_message("Step 8: Creating HTML summary...", progress=95)
-            try:
-                html_path = self._create_highlights_html(highlight_dir, selected_df, has_visibility_data)
-                if html_path and os.path.exists(html_path):
-                    log_message(f"✓ HTML summary created: {html_path}")
-                else:
-                    log_message("WARNING: Failed to create HTML summary")
-            except Exception as html_error:
-                log_message(f"ERROR creating HTML summary: {html_error}")
-                log_message(traceback.format_exc())
-            
-            # Create panel image with top 4 highlights
-            log_message("Creating 4-panel summary image for reports...", progress=97)
-            try:
-                panel_path = self.create_highlight_panel(highlight_dir, selected_df, top_count=4)
-                if panel_path and os.path.exists(panel_path):
-                    log_message(f"✓ Created highlight panel image: {panel_path}")
-                else:
-                    log_message("WARNING: Could not create highlight panel image (matplotlib may be missing)")
-            except Exception as panel_error:
-                log_message(f"ERROR creating panel image: {panel_error}")
-                log_message(traceback.format_exc())
-            
-            # Export metrics to CSV
-            try:
-                log_message("Exporting metrics to image_locations.csv...", progress=98)
-                if self.export_metrics_to_csv(output_folder, selected_df):
-                    log_message("✓ Metrics exported to CSV successfully")
-                else:
-                    log_message("WARNING: Failed to export metrics to CSV")
-            except Exception as csv_error:
-                log_message(f"ERROR exporting metrics to CSV: {csv_error}")
-                log_message(traceback.format_exc())
-            
-            log_message(f"✓ Selected {len(highlight_paths)} highlight images. Saved to {highlight_dir}", progress=100)
+                log_message("No highlight images were selected", progress=100)
             
             return highlight_paths
             
         except Exception as e:
             log_message(f"ERROR in highlight selection: {e}", progress=100)
-            log_message(traceback.format_exc())
+            print(f"HighlightSelector traceback: {traceback.format_exc()}")
             return []
     
     def _calculate_image_metrics(self, img_path: str) -> Dict[str, float]:
@@ -1603,3 +1476,83 @@ class HighlightSelector:
             print(f"Error loading metrics from CSV: {e}")
             print(traceback.format_exc())
             return self._pd.DataFrame()
+    
+    def calculate_image_metrics(self, img_path: str) -> Optional[Dict]:
+        """
+        Calculate quality metrics for a single image
+        
+        Args:
+            img_path: Path to the image file
+            
+        Returns:
+            Dictionary with calculated metrics or None if error
+        """
+        try:
+            # Import libraries locally
+            import numpy as np
+            from PIL import Image, ImageStat
+            
+            # Load image
+            with Image.open(img_path) as img:
+                # Convert to RGB if necessary
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Resize large images for faster processing
+                max_dimension = 800
+                if max(img.width, img.height) > max_dimension:
+                    if img.width > img.height:
+                        new_size = (max_dimension, int(img.height * max_dimension / img.width))
+                    else:
+                        new_size = (int(img.width * max_dimension / img.height), max_dimension)
+                    img = img.resize(new_size, Image.LANCZOS)
+                
+                # Convert to numpy array for calculations
+                img_array = np.array(img)
+                
+                # Calculate contrast (standard deviation of luminance)
+                gray = np.dot(img_array[...,:3], [0.299, 0.587, 0.114])
+                contrast = np.std(gray) / 255.0
+                
+                # Calculate texture (Laplacian variance)
+                try:
+                    from scipy import ndimage
+                    laplacian = ndimage.laplace(gray)
+                    texture = np.var(laplacian) / 10000.0  # Normalize
+                except ImportError:
+                    # Fallback: use simple gradient if scipy not available
+                    dx = np.diff(gray, axis=1)
+                    dy = np.diff(gray, axis=0)
+                    gradient_magnitude = np.sqrt(
+                        np.pad(dx, ((0, 0), (0, 1)), mode='constant')**2 + 
+                        np.pad(dy, ((0, 1), (0, 0)), mode='constant')**2
+                    )
+                    texture = np.mean(gradient_magnitude) / 255.0
+                
+                # Calculate color variance
+                color_variance = np.var(img_array) / 65535.0  # Normalize for RGB
+                
+                # Calculate entropy
+                hist, _ = np.histogram(gray, bins=256, range=(0, 256))
+                hist = hist[hist > 0]  # Remove zeros
+                if len(hist) > 0:
+                    prob = hist / hist.sum()
+                    entropy = -np.sum(prob * np.log2(prob)) / 8.0  # Normalize
+                else:
+                    entropy = 0.0
+                
+                return {
+                    'contrast': float(min(contrast, 1.0)),
+                    'texture': float(min(texture, 1.0)),
+                    'color_variance': float(min(color_variance, 1.0)),
+                    'entropy': float(min(entropy, 1.0))
+                }
+                
+        except Exception as e:
+            print(f"Error calculating metrics for {img_path}: {e}")
+            return {
+                'contrast': 0.0,
+                'texture': 0.0,
+                'color_variance': 0.0,
+                'entropy': 0.0
+            }

@@ -65,7 +65,7 @@ class AppWindow(UIComponents, ProcessingController):
         self.batch_var = tk.BooleanVar()  # Add this for ProcessingController compatibility
         
         # Processing function variables
-        self.lls_processing_var = tk.BooleanVar()
+        self.lls_processing_var = tk.BooleanVar(value=True)
         self.basic_metrics_var = tk.BooleanVar(value=True)
         self.location_map_var = tk.BooleanVar(value=True)
         self.histogram_var = tk.BooleanVar(value=True)

@@ -14,13 +14,12 @@ class VisibilityAnalyzer:
     Uses a pre-trained deep learning model or can train a new one.
     """
     
-    def __init__(self, log_callback: Optional[Callable] = None, altitude_threshold=9.0):
+    def __init__(self, log_callback: Optional[Callable] = None):
         """
         Initialize the VisibilityAnalyzer
         
         Args:
             log_callback: Optional function to call for logging messages
-            altitude_threshold: Altitude threshold for filtering images (same as used in metrics)
         """
         self.model = None
         self.tf = None
@@ -30,11 +29,20 @@ class VisibilityAnalyzer:
         self._np = None
         self._folium = None
         self._geopandas = None
+        self._sns = None  # Add seaborn for enhanced charts
         self.using_gpu = False
+        self.tf_available = False
         self.log_callback = log_callback
         
         # Initialize categories
-        self.categories = ['good', 'fair', 'poor']  # Default categories
+        self.categories = ['zero_visibility', 'low_visibility', 'good_visibility', 'great_visibility']
+        
+        # Initialize statistics containers
+        self.visibility_stats = {}
+        self.all_images = set()
+        self.all_image_locations = {}
+        self.selected_images = set()
+        self.selected_image_locations = {}
     
     def log_message(self, message: str, progress: Optional[int] = None):
         """
@@ -45,9 +53,14 @@ class VisibilityAnalyzer:
             progress: Optional progress percentage
         """
         if self.log_callback:
-            if progress is not None:
-                self.log_callback(message, progress=progress)
-            else:
+            try:
+                # Try calling with progress first
+                if progress is not None:
+                    self.log_callback(message, progress=progress)
+                else:
+                    self.log_callback(message)
+            except TypeError:
+                # Fallback if the callback doesn't accept progress
                 self.log_callback(message)
         else:
             print(f"VisibilityAnalyzer: {message}")
@@ -59,64 +72,87 @@ class VisibilityAnalyzer:
     def _import_required_libraries(self):
         """Import required libraries on demand"""
         try:
-            if self._pd is None:
-                import pandas as pd
-                self._pd = pd
-            
-            if self._np is None:
-                import numpy as np
-                self._np = np
+            if self._cv2 is None:
+                import cv2
+                self._cv2 = cv2
                 
             if self._plt is None:
                 import matplotlib.pyplot as plt
                 self._plt = plt
                 
+            if self._pd is None:
+                import pandas as pd
+                self._pd = pd
+                
+            if self._np is None:
+                import numpy as np
+                self._np = np
+                
+            # Try to import seaborn for enhanced plotting
             if self._sns is None:
-                import seaborn as sns
-                self._sns = sns
+                try:
+                    import seaborn as sns
+                    self._sns = sns
+                except ImportError:
+                    # Seaborn is optional
+                    pass
                 
             return True
+            
         except ImportError as e:
-            if hasattr(self, 'log_message'):
-                self.log_message(f"Error importing required libraries: {e}")
+            self.log_message(f"Required libraries not available: {e}")
             return False
     
-    def _import_tensorflow(self):
-        """Try to import TensorFlow and set it up"""
-        if self.tf_available:
+    def _import_optional_libraries(self) -> bool:
+        """Import optional libraries for mapping features"""
+        try:
+            if self._folium is None:
+                import folium
+                self._folium = folium
+                
+            if self._geopandas is None:
+                import geopandas as gpd
+                self._geopandas = gpd
+                
             return True
             
+        except ImportError:
+            self.log_message("Optional mapping libraries not available (folium, geopandas)")
+            return False
+    
+    def _import_tensorflow(self) -> bool:
+        """Import TensorFlow with proper error handling"""
         try:
-            import tensorflow as tf
-            self.tf = tf
-            
-            # Configure GPU if available
-            gpus = tf.config.list_physical_devices('GPU')
-            if gpus:
-                try:
-                    for gpu in gpus:
-                        tf.config.experimental.set_memory_growth(gpu, True)
-                    self.using_gpu = True
-                    self.gpu_devices = [gpu.name for gpu in gpus]
-                    if hasattr(self, 'log_message'):
-                        self.log_message(f"TensorFlow {tf.__version__} initialized with GPU support ({len(gpus)} GPU(s))")
-                except RuntimeError as e:
-                    if hasattr(self, 'log_message'):
-                        self.log_message(f"Error configuring GPU: {e}")
-            else:
-                if hasattr(self, 'log_message'):
-                    self.log_message(f"TensorFlow {tf.__version__} initialized (CPU only)")
+            if self.tf is None:
+                import tensorflow as tf
+                self.tf = tf
+                
+                # Check for GPU
+                gpus = tf.config.experimental.list_physical_devices('GPU')
+                if gpus:
+                    try:
+                        # Enable memory growth for GPU
+                        for gpu in gpus:
+                            tf.config.experimental.set_memory_growth(gpu, True)
+                        self.using_gpu = True
+                        self.log_message(f"✓ TensorFlow loaded with GPU support ({len(gpus)} GPU(s) found)")
+                    except Exception as e:
+                        self.log_message(f"GPU setup failed, using CPU: {e}")
+                        self.using_gpu = False
+                else:
+                    self.using_gpu = False
+                    self.log_message("✓ TensorFlow loaded (CPU only)")
             
             self.tf_available = True
             return True
             
-        except ImportError:
-            if hasattr(self, 'log_message'):
-                self.log_message("TensorFlow not available - visibility analysis will be disabled")
+        except ImportError as e:
+            self.log_message(f"TensorFlow not available: {e}")
+            self.tf_available = False
             return False
         except Exception as e:
-            if hasattr(self, 'log_message'):
-                self.log_message(f"Error setting up TensorFlow: {str(e)}")
+            self.log_message(f"Error importing TensorFlow: {e}")
+            self.tf_available = False
             return False
     
     def _load_img(self, path, target_size=(224, 224)):
@@ -392,31 +428,29 @@ class VisibilityAnalyzer:
                       progress_callback: Optional[Callable] = None,
                       altitude_threshold: float = 8.0) -> Tuple[bool, Dict]:
         """
-        Analyze the visibility of a set of images
+        Analyze images for visibility and generate reports
         
         Args:
-            image_paths: List of paths to images to analyze
-            output_folder: Output directory for reports
+            image_paths: List of image paths to analyze (if empty, will scan output folder's parent)
+            output_folder: Output directory for results
             progress_callback: Optional callback for progress updates
-            altitude_threshold: Maximum altitude to analyze (in meters)
+            altitude_threshold: Altitude threshold for filtering
             
         Returns:
-            Tuple of (success, statistics_dict)
+            Tuple of (success: bool, results: dict)
         """
         def log_message(msg, progress=None):
+            # Always call self.log_message first
+            self.log_message(msg)
+            # Then call progress callback if available
             if progress_callback and progress is not None:
-                progress_callback(progress, msg)
-            print(msg)
+                try:
+                    progress_callback(progress, msg)
+                except Exception:
+                    pass  # Ignore progress callback errors
         
-        # Store the log function
-        self.log_message = log_message
-
-        log_message("\n" + "=" * 80)
-        log_message(f"VISIBILITY ANALYSIS STARTED: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        log_message(f"Altitude threshold: {altitude_threshold}m")
-        log_message("=" * 80)
-
-        # Import required libraries
+        log_message("Starting visibility analysis...", progress=0)
+        
         if not self._import_tensorflow():
             log_message("TensorFlow not available. Cannot perform analysis.", progress=0)
             return False, {}
@@ -438,276 +472,206 @@ class VisibilityAnalyzer:
             os.makedirs(output_folder, exist_ok=True)
             log_message(f"✓ Output directory confirmed: {output_folder}")
             
-            # Initialize tracking variables
-            self.all_image_locations = {}
-            self.selected_image_locations = {}
-            self.selected_images = set()
-            self.all_images = set()
-            
-            # STEP 1: Load altitude and location data
-            log_message("\nSTEP 1: Loading altitude and location data", progress=5)
-            
-            altitude_map = {}
-            lat_lon_map = {}
-            has_altitude_data = False
-            has_location_data = False
-            
-            # Try to load existing CSV data
-            try:
-                csv_path = os.path.join(output_folder, "image_locations.csv")
-                if os.path.exists(csv_path):
-                    df = self._pd.read_csv(csv_path)
-                    
-                    required_columns = ['filename', 'altitude', 'latitude', 'longitude']
-                    has_required_columns = all(col in df.columns for col in required_columns)
-                    
-                    if has_required_columns:
-                        for _, row in df.iterrows():
-                            filename = os.path.basename(row['filename'])
-                            altitude_map[filename] = row['altitude']
-                            lat_lon_map[filename] = (row['latitude'], row['longitude'])
-                        has_altitude_data = True
-                        has_location_data = True
-                        log_message(f"✓ Found altitude and location data for {len(altitude_map)} images", progress=10)
-                    elif 'altitude' in df.columns and 'filename' in df.columns:
-                        for _, row in df.iterrows():
-                            filename = os.path.basename(row['filename'])
-                            altitude_map[filename] = row['altitude']
-                        has_altitude_data = True
-                        log_message(f"✓ Loaded altitude data for {len(altitude_map)} images (no location data)", progress=10)
-            except Exception as e:
-                log_message(f"Warning: Could not load altitude/location data from CSV: {e}", progress=10)
-            
-            # STEP 2: Scan for images
-            log_message("\nSTEP 2: Scanning for processed images in dataset", progress=15)
-            
-            all_images_paths = []
-            
+            # If no image paths provided, scan for images
             if not image_paths:
-                # Scan directory
-                input_folder = os.path.dirname(output_folder)
-                if not os.path.isdir(input_folder) or input_folder == output_folder:
-                    input_folder = os.path.dirname(input_folder)
+                # Look in the input folder that should be the parent of output folder
+                parent_dir = os.path.dirname(output_folder)
                 
-                if os.path.isdir(input_folder):
-                    log_message(f"Scanning for processed images in {input_folder}...", progress=20)
-                    
-                    for root, _, files in os.walk(input_folder):
-                        for file in files:
-                            if file.lower().endswith(('.jpg', '.jpeg')):
-                                full_path = os.path.join(root, file)
-                                if "raw" not in root.lower() and "raw" not in file.lower():
-                                    if os.path.isfile(full_path):
-                                        all_images_paths.append(full_path)
-            else:
-                all_images_paths = [path for path in image_paths 
-                                  if os.path.isfile(path) and
-                                  path.lower().endswith(('.jpg', '.jpeg')) and
-                                  "raw" not in path.lower()]
-            
-            total_images_found = len(all_images_paths)
-            
-            if total_images_found == 0:
-                log_message("Error: No images found in dataset", progress=0)
-                return False, {}
-                
-            log_message(f"✓ Found {total_images_found} total images in dataset", progress=25)
-            
-            # STEP 3: Filter by altitude
-            log_message(f"\nSTEP 3: Filtering images by altitude threshold ({altitude_threshold}m)", progress=30)
-            
-            below_threshold_images = []
-            filtered_by_altitude = 0
-            
-            for i, img_path in enumerate(all_images_paths):
-                filename = os.path.basename(img_path)
-                
-                # Store all image info
-                self.all_images.add(filename)
-                if filename in lat_lon_map:
-                    self.all_image_locations[filename] = lat_lon_map[filename]
-                
-                # Check altitude threshold
-                if has_altitude_data and filename in altitude_map:
-                    altitude = altitude_map[filename]
-                    if altitude <= altitude_threshold:
-                        below_threshold_images.append(img_path)
-                    else:
-                        filtered_by_altitude += 1
+                # Check if parent directory name suggests it's an image folder
+                if any(keyword in parent_dir.lower() for keyword in ['image', 'photo', 'jpg', 'png']):
+                    scan_dir = parent_dir
                 else:
-                    below_threshold_images.append(img_path)
+                    # Look for common image folder patterns
+                    possible_dirs = []
+                    parent_parent = os.path.dirname(parent_dir)
+                    
+                    for item in os.listdir(parent_parent):
+                        item_path = os.path.join(parent_parent, item)
+                        if os.path.isdir(item_path):
+                            if any(keyword in item.lower() for keyword in ['image', 'jpg', 'raw', 'processed', 'advanced']):
+                                possible_dirs.append(item_path)
+                    
+                    # Use the first matching directory or fall back to parent
+                    scan_dir = possible_dirs[0] if possible_dirs else parent_dir
                 
-                # Update progress periodically
-                if progress_callback and (i % 1000 == 0 or i == total_images_found - 1):
-                    log_message(
-                        f"Filtered {i+1}/{total_images_found} images, {filtered_by_altitude} above threshold",
-                        progress=30 + int((i / total_images_found) * 10)
-                    )
-            log_message(f"✓ Altitude filtering complete: {filtered_by_altitude} images excluded", progress=40)
+                log_message(f"Scanning for images in: {scan_dir}")
+                
+                image_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif')
+                image_paths = []
+                
+                if os.path.exists(scan_dir):
+                    for root, dirs, files in os.walk(scan_dir):
+                        # Skip the output folder itself
+                        if root == output_folder:
+                            continue
+                        for file in files:
+                            if file.lower().endswith(image_extensions):
+                                image_paths.append(os.path.join(root, file))
+                
+                if not image_paths:
+                    log_message(f"No images found in {scan_dir}", progress=0)
+                    return False, {}
             
-            # STEP 4: Select images for analysis
-            log_message("\nSTEP 4: Selecting images for visibility analysis", progress=45)
+            log_message(f"Found {len(image_paths)} images to analyze", progress=5)
             
-            below_threshold_count = len(below_threshold_images)
+            # Initialize tracking variables
+            results = []
+            processed_count = 0
+            error_count = 0
             
-            if below_threshold_count == 0:
-                log_message(f"Error: No images found below altitude threshold of {altitude_threshold}m", progress=0)
+            # Process images in batches for efficiency
+            batch_size = 32 if self.using_gpu else 16
+            total_batches = (len(image_paths) + batch_size - 1) // batch_size
+            
+            log_message(f"Processing {len(image_paths)} images in {total_batches} batches", progress=15)
+            
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, len(image_paths))
+                batch_paths = image_paths[start_idx:end_idx]
+                
+                # Load and preprocess batch
+                batch_images = []
+                batch_info = []
+                
+                for img_path in batch_paths:
+                    try:
+                        # Use tf.keras.preprocessing.image.load_img for compatibility
+                        img = self.tf.keras.preprocessing.image.load_img(img_path, target_size=(224, 224))
+                        img_array = self.tf.keras.preprocessing.image.img_to_array(img)
+                        img_normalized = img_array.astype('float32') / 255.0
+                        
+                        batch_images.append(img_normalized)
+                        batch_info.append({
+                            'path': img_path,
+                            'filename': os.path.basename(img_path)
+                        })
+                    except Exception as e:
+                        error_count += 1
+                        log_message(f"Could not load image: {img_path} - {e}")
+                
+                if batch_images:
+                    # Run prediction
+                    batch_array = self._np.array(batch_images)
+                    predictions = self.model.predict(batch_array, verbose=0)
+                    
+                    # Process predictions
+                    for i, (pred, info) in enumerate(zip(predictions, batch_info)):
+                        try:
+                            # Get predicted class and confidence
+                            class_idx = self._np.argmax(pred)
+                            confidence = float(pred[class_idx])
+                            
+                            # Map class index to visibility category
+                            if class_idx < len(self.categories):
+                                visibility = self.categories[class_idx]
+                            else:
+                                visibility = f"class_{class_idx}"
+                            
+                            result = {
+                                'image': info['filename'],
+                                'visibility': visibility,
+                                'confidence': confidence
+                            }
+                            
+                            results.append(result)
+                            processed_count += 1
+                            
+                        except Exception as e:
+                            error_count += 1
+                            log_message(f"Error processing prediction for {info['filename']}: {e}")
+                
+                # Update progress
+                progress = 15 + int((batch_idx + 1) / total_batches * 70)
+                log_message(f"Processed batch {batch_idx + 1}/{total_batches}", progress=progress)
+            
+            log_message(f"✓ Analysis complete: {processed_count} images processed, {error_count} errors", progress=85)
+            
+            if not results:
+                log_message("No results to save!", progress=0)
                 return False, {}
             
-            # Random sample if too many images
-            images_to_analyze = below_threshold_images
-            if below_threshold_count > 5000:
-                log_message(f"Randomly selecting 5000 images from {below_threshold_count} below threshold...", progress=47)
+            # Save results to CSV
+            log_message("Saving results and creating visualizations...", progress=90)
+            
+            csv_path = os.path.join(output_folder, "visibility_results.csv")
+            try:
+                df = self._pd.DataFrame(results)
                 
-                import random
-                random.seed(42)
-                images_to_analyze = random.sample(below_threshold_images, 5000)
+                # Save basic CSV
+                df.to_csv(csv_path, index=False)
+                log_message(f"✓ Results saved to CSV: {csv_path}")
                 
-                log_message(f"✓ Selected 5000 random images for analysis", progress=50)
-            else:
-                log_message(f"✓ Using all {below_threshold_count} images below threshold for analysis", progress=50)
-            
-            # STEP 5: Analyze images
-            log_message(f"\nSTEP 5: Analyzing visibility of {len(images_to_analyze)} images", progress=55)
-            
-            # Store selected image info
-            for img_path in images_to_analyze:
-                filename = os.path.basename(img_path)
-                self.selected_images.add(filename)
-                if filename in lat_lon_map:
-                    self.selected_image_locations[filename] = lat_lon_map[filename]
-            
-            # Initialize statistics
-            self.visibility_stats = {
-                'total_images_found': total_images_found,
-                'filtered_by_altitude': filtered_by_altitude,
-                'below_threshold_count': below_threshold_count,
-                'images_analyzed': len(images_to_analyze),
-                'by_category': {cat: 0 for cat in self.categories},
-                'percentages': {},
-                'analyzed_images': []
-            }
-            
-            # Process images
-            results = []
-            for i, img_path in enumerate(images_to_analyze):
-                try:
-                    # Load and preprocess image
-                    img = self._load_img(img_path, target_size=(224, 224))
-                    img_array = self._img_to_array(img)
-                    img_array = self._preprocess_input(img_array)
-                    img_array = self._np.expand_dims(img_array, axis=0)
-                    
-                    # Predict
-                    predictions = self.model.predict(img_array, verbose=0)
-                    predicted_class = self._np.argmax(predictions[0])
-                    confidence = float(predictions[0][predicted_class])
-                    
-                    result = {
-                        'image': os.path.basename(img_path),
-                        'visibility': self.categories[predicted_class],
-                        'confidence': confidence
-                    }
-                    
-                    # Add altitude if available
-                    if os.path.basename(img_path) in altitude_map:
-                        result['altitude'] = altitude_map[os.path.basename(img_path)]
-                    
-                    # Update statistics
-                    self.visibility_stats['by_category'][self.categories[predicted_class]] += 1
-                    self.visibility_stats['analyzed_images'].append(result)
-                    results.append(result)
-                    
-                    # Update progress
-                    if progress_callback and (i % 50 == 0 or i == len(images_to_analyze) - 1):
-                        log_message(
-                            f"Analyzed {i+1}/{len(images_to_analyze)} images",
-                            progress=55 + int((i / len(images_to_analyze)) * 35)
-                        )
-                    
-                except Exception as e:
-                    log_message(f"Error processing image {img_path}: {e}")
-            
-            # Calculate percentages
-            total_analyzed = len(self.visibility_stats['analyzed_images'])
-            for category in self.categories:
-                count = self.visibility_stats['by_category'].get(category, 0)
-                self.visibility_stats['percentages'][category] = (count / total_analyzed * 100) if total_analyzed > 0 else 0
-            
-            log_message("\nAnalysis complete. Results by category:")
-            for category in self.categories:
-                count = self.visibility_stats['by_category'].get(category, 0)
-                percentage = self.visibility_stats['percentages'].get(category, 0)
-                log_message(f"  {category}: {count} images ({percentage:.1f}%)")
-            
-            # STEP 6: Save results and create visualizations
-            log_message("\nSTEP 6: Saving results and creating visualizations...", progress=90)
-            
-            if results:
-                # Save CSV
-                csv_path = os.path.join(output_folder, "visibility_results.csv")
-                try:
-                    df = self._pd.DataFrame(results)
-                    
-                    # Add location data if available
-                    if has_location_data:
-                        for i, row in df.iterrows():
-                            img_filename = row['image']
-                            if img_filename in lat_lon_map:
-                                df.at[i, 'latitude'] = lat_lon_map[img_filename][0]
-                                df.at[i, 'longitude'] = lat_lon_map[img_filename][1]
-                    
-                    # Save CSV
-                    cols = ['image', 'visibility', 'confidence']
-                    if has_location_data:
-                        cols.extend(['latitude', 'longitude'])
-                    if 'altitude' in df.columns:
-                        cols.append('altitude')
-                    
-                    # Ensure all columns exist
-                    for col in cols:
-                        if col not in df.columns:
-                            df[col] = None
-                    
-                    df[cols].to_csv(csv_path, index=False)
-                    log_message(f"✓ Results saved to CSV: {csv_path}")
-                    
-                    # Create visualizations
+                # Verify file was created
+                if os.path.exists(csv_path):
+                    file_size = os.path.getsize(csv_path)
+                    log_message(f"✓ CSV file created successfully: {file_size} bytes")
+                else:
+                    log_message("ERROR: CSV file was not created!")
+                    return False, {}
+                
+                # Create basic visualization if matplotlib is available
+                if self._plt:
                     try:
+                        log_message("Creating visualizations...", progress=95)
                         chart_path = self.create_visibility_chart(csv_path, output_folder)
                         if chart_path and os.path.exists(chart_path):
                             log_message(f"✓ Visibility chart created: {chart_path}")
-                        
-                        enhanced_chart_path = self.create_enhanced_visibility_chart(csv_path, output_folder)
-                        if enhanced_chart_path and os.path.exists(enhanced_chart_path):
-                            log_message(f"✓ Enhanced visibility chart created: {enhanced_chart_path}")
-                            
                     except Exception as chart_error:
                         log_message(f"Warning: Error creating charts: {chart_error}")
-                    
-                    # Create map if location data available
-                    if has_location_data:
-                        try:
-                            map_path = self.create_location_map(output_folder)
-                            if map_path and os.path.exists(map_path):
-                                log_message(f"✓ Location map created: {map_path}")
-                            
-                            shapefile_path = self.create_shapefile(output_folder)
-                            if shapefile_path and os.path.exists(shapefile_path):
-                                log_message(f"✓ Shapefile created: {shapefile_path}")
-                                
-                        except Exception as map_error:
-                            log_message(f"Warning: Error creating maps/shapefiles: {map_error}")
-                    
-                    log_message("✓ Visibility analysis completed successfully!", progress=100)
-                    return True, self.visibility_stats
-                    
-                except Exception as e:
-                    log_message(f"Error saving results to CSV: {e}", progress=0)
-                    return False, {}
-            else:
-                log_message("WARNING: No results to save!", progress=0)
+                
+                log_message("✓ Visibility analysis completed successfully!", progress=100)
+                
+                # Return results summary
+                summary = {
+                    'total_images_found': len(image_paths),
+                    'images_analyzed': processed_count,
+                    'errors': error_count,
+                    'csv_path': csv_path,
+                    'by_category': df['visibility'].value_counts().to_dict() if not df.empty else {}
+                }
+                
+                return True, summary
+                        
+            except Exception as e:
+                log_message(f"Error saving results to CSV: {e}")
                 return False, {}
+                
         except Exception as e:
-            log_message(f"Error during analysis: {e}", progress=0)
+            log_message(f"Error during visibility analysis: {e}")
             return False, {}
+
+    def create_visibility_chart(self, csv_path: str, output_folder: str) -> Optional[str]:
+        """Create a basic visibility distribution chart"""
+        try:
+            if not self._plt:
+                return None
+                
+            df = self._pd.read_csv(csv_path)
+            
+            # Create chart
+            visibility_counts = df['visibility'].value_counts()
+            
+            fig, ax = self._plt.subplots(figsize=(10, 6))
+            bars = ax.bar(visibility_counts.index, visibility_counts.values)
+            
+            # Add value labels on bars
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{int(height)}',
+                       ha='center', va='bottom')
+            
+            ax.set_title('Visibility Distribution')
+            ax.set_xlabel('Visibility Category')
+            ax.set_ylabel('Number of Images')
+            
+            chart_path = os.path.join(output_folder, 'visibility_analysis.png')
+            self._plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+            self._plt.close()
+            
+            return chart_path
+            
+        except Exception as e:
+            self.log_message(f"Error creating visibility chart: {e}")
+            return None

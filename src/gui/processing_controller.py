@@ -117,46 +117,160 @@ class ProcessingController:
         """Process images and LLS data based on selected functions"""
         try:
             self.update_progress(0, "Starting processing...")
+                       
+            # Check what processing is selected
+            lls_selected = self.lls_processing_var.get()
+            imagery_selected = any([
+                self.basic_metrics_var.get(),
+                self.location_map_var.get(),
+                self.histogram_var.get(),
+                self.footprint_map_var.get(),
+                self.visibility_analyzer_var.get(),
+                self.highlight_selector_var.get()
+            ])
             
-            # Update thresholds
-            self.update_component_thresholds()
+            # Process LLS data first if selected
+            if lls_selected:
+                self.log_message("Processing LLS data...")
+                try:
+                    self.process_lls_data(output_folder)
+                    self.log_message("✓ LLS processing completed")
+                except Exception as lls_error:
+                    self.log_message(f"✗ LLS processing failed: {lls_error}")
+                    self.log_message(f"Traceback: {traceback.format_exc()}")
             
-            # STAGE 0: LLS Data Processing (if selected)
-            progress_offset = 0
-            if self.lls_processing_var.get():
-                self.process_lls_data(output_folder)
-                progress_offset = 30  # LLS takes 30% of progress
-            
-            # Load navigation data if provided for imagery processing
-            imagery_selected = any([self.basic_metrics_var.get(), self.location_map_var.get(),
-                                   self.histogram_var.get(), self.footprint_map_var.get(),
-                                   self.visibility_analyzer_var.get(), self.highlight_selector_var.get()])
-            
+            # Process imagery data if selected
             if imagery_selected:
-                nav_path = self.nav_path.get()
-                if nav_path and os.path.exists(nav_path):
-                    self.load_navigation_data(nav_path)
+                # Load navigation data if provided and needed
+                nav_file = self.nav_path.get()
+                if nav_file and os.path.exists(nav_file):
+                    try:
+                        if self.load_navigation_data(nav_file):
+                            self.log_message("✓ Navigation data loaded successfully")
+                        else:
+                            self.log_message("⚠ Navigation data load failed - continuing without it")
+                    except Exception as nav_error:
+                        self.log_message(f"⚠ Navigation data error: {nav_error}")
                 
-                # Determine processing stages needed
-                imagery_stages = self.get_required_imagery_stages()
+                # IMPORTANT: Process basic metrics FIRST to populate GPS data
+                try:
+                    self.log_message("Extracting image metadata...")
+                    
+                    # Always extract GPS data for other stages
+                    extract_gps = True
+                    processed_files, results = self.metrics.analyze_directory(
+                        input_folder,
+                        progress_callback=None,
+                        extract_gps=extract_gps
+                    )
+                    
+                    self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
+                    
+                except Exception as metadata_error:
+                    self.log_message(f"✗ Error extracting metadata: {metadata_error}")
+                    self.log_message("Cannot proceed without image metadata")
+                    return
                 
-                # Process each stage with adjusted progress
-                stage_progress = (100 - progress_offset) / len(imagery_stages) if imagery_stages else 0
+                # Get list of processing stages
+                processing_stages = []
                 
-                for i, (stage_name, stage_func) in enumerate(imagery_stages):
-                    if stage_func:
-                        current_progress = progress_offset + (i * stage_progress)
-                        self.update_progress(current_progress, stage_name.split(":")[1].strip())
-                        self.log_message(f"\n{stage_name}")
-                        stage_func(input_folder, output_folder)
+                if self.basic_metrics_var.get():
+                    processing_stages.append(("Basic Metrics Analysis", self.process_basic_metrics))
+                
+                if self.location_map_var.get():
+                    processing_stages.append(("Location Map Generation", self.process_location_map))
+                
+                if self.histogram_var.get():
+                    processing_stages.append(("Altitude Histogram", self.process_histogram))
+                
+                if self.footprint_map_var.get():
+                    processing_stages.append(("Footprint Map Generation", self.process_footprint_map))
+                
+                if self.visibility_analyzer_var.get():
+                    processing_stages.append(("Visibility Analysis", self.process_visibility_analysis))
+                
+                if self.highlight_selector_var.get():
+                    processing_stages.append(("Highlight Selection", self.process_highlight_selection))
+                
+                if not processing_stages:
+                    self.log_message("No imagery processing functions selected")
+                else:
+                    self.log_message(f"Processing {len(processing_stages)} imagery stages...")
+                    
+                    # Process each stage
+                    completed_stages = 0
+                    total_stages = len(processing_stages)
+                    
+                    for stage_idx, (stage_name, stage_func) in enumerate(processing_stages):
+                        try:
+                            # Calculate progress
+                            base_progress = 40 if lls_selected else 20  # Account for LLS processing
+                            current_progress = int(base_progress + (stage_idx / total_stages * 50))  # 40-90% or 20-70% for stages
+                            
+                            # Update progress with stage name
+                            progress_text = stage_name
+                            self.update_progress(current_progress, progress_text)
+                            
+                            self.log_message(f"STAGE {stage_idx + 1}/{total_stages}: {stage_name}")
+                            
+                            # Execute the stage
+                            stage_func(input_folder, output_folder)
+                            completed_stages += 1
+                            
+                            self.log_message(f"✓ {stage_name} completed")
+                            
+                        except Exception as stage_error:
+                            self.log_message(f"✗ Error in {stage_name}: {stage_error}")
+                            self.log_message(f"Traceback: {traceback.format_exc()}")
+                            self.log_message(f"Continuing with next stage...")
+                    
+                    # Final summary for imagery processing
+                    self.log_message(f"\n{'='*60}")
+                    self.log_message(f"IMAGERY PROCESSING SUMMARY")
+                    self.log_message(f"{'='*60}")
+                    self.log_message(f"Total stages: {total_stages}")
+                    self.log_message(f"Completed successfully: {completed_stages}")
+                    self.log_message(f"Failed: {total_stages - completed_stages}")
+                    self.log_message(f"Success rate: {(completed_stages/total_stages*100):.1f}%")
+                    
+                    if completed_stages == total_stages:
+                        self.log_message("✓ All imagery processing completed successfully!")
+                    else:
+                        self.log_message(f"⚠ Imagery processing completed with {total_stages - completed_stages} errors")
+            
+            # Final overall summary
+            total_processes = (1 if lls_selected else 0) + (1 if imagery_selected else 0)
+            self.log_message(f"\n{'='*60}")
+            self.log_message(f"OVERALL PROCESSING SUMMARY")
+            self.log_message(f"{'='*60}")
+            
+            if lls_selected:
+                self.log_message("LLS Processing: Completed")
+            if imagery_selected:
+                self.log_message("Imagery Processing: Completed")
+            
+            if total_processes > 0:
+                self.log_message("✓ All processing completed successfully!")
+                self.update_progress(100, "All processing completed")
+            else:
+                self.log_message("⚠ No processing was performed")
+                self.update_progress(100, "No processing performed")
+            
+            # Play completion sound
+            self.play_completion_sound()
             
         except Exception as e:
             self.log_message(f"Error during processing: {str(e)}")
-            traceback.print_exc()
+            self.log_message(f"Traceback: {traceback.format_exc()}")
+            self.update_progress(0, "Error during processing")
+        finally:
+            # Re-enable the process button
+            if hasattr(self, 'process_button'):
+                self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
     def process_lls_data(self, output_folder):
         """Process LLS data"""
-        self.log_message("\nSTAGE 0: Processing LLS (Laser Line Scan) data...")
+        self.log_message("STAGE 0: Processing LLS (Laser Line Scan) data...")
         
         lls_folder = self.lls_path.get()
         phins_nav_file = self.phins_nav_path.get()
@@ -172,45 +286,60 @@ class ProcessingController:
         try:
             from src.models.lls_processor import LLSProcessor
             
+            # Calculate progress offset for LLS (use 0-30% for LLS processing)
+            progress_offset = 0
+            progress_scale = 30
+            
             lls_processor = LLSProcessor(
                 log_callback=self.log_message,
-                progress_callback=lambda value, msg: self.update_progress(value * 0.3, msg)
+                progress_callback=lambda value, msg: self.update_progress(
+                    progress_offset + (value * progress_scale / 100), msg
+                )
             )
             
             success = lls_processor.process_lls_data(lls_folder, phins_nav_file, output_folder)
             
             if success:
-                self.log_message("LLS data processing completed successfully")
+                self.log_message("✓ LLS data processing completed successfully")
+                self.update_progress(30, "LLS processing completed")
             else:
-                self.log_message("Error during LLS data processing")
+                self.log_message("✗ Error during LLS data processing")
                 
         except ImportError as e:
             self.log_message(f"Error: Could not import LLS processing modules: {e}")
             self.log_message("LLS processing will be skipped")
         except Exception as e:
             self.log_message(f"Error during LLS processing: {str(e)}")
-            traceback.print_exc()
+            self.log_message(f"Traceback: {traceback.format_exc()}")
 
     def load_navigation_data(self, nav_file):
-        """Load navigation data from file - placeholder implementation"""
+        """Load navigation data for altitude information"""
         try:
-            # This method should be implemented based on your navigation file format
-            # For now, just verify the file exists and is readable
-            if os.path.exists(nav_file):
-                with open(nav_file, 'r') as f:
-                    # Try to read first few lines to verify format
-                    lines = f.readlines()[:5]
-                    if lines:
-                        self.log_message(f"Navigation file appears valid: {len(lines)} sample lines read")
-                        return True
-                    else:
-                        self.log_message("Navigation file is empty")
-                        return False
-            else:
-                self.log_message(f"Navigation file not found: {nav_file}")
+            if not hasattr(self, 'metrics') or not self.metrics:
                 return False
+                
+            success = self.metrics.load_nav_data(nav_file)
+            if success:
+                self.log_message(f"       ✓ Navigation data loaded for altitude extraction")
+                
+                # Make nav data available to other components
+                if hasattr(self.metrics, 'nav_timestamps'):
+                    if hasattr(self, 'altitude_map'):
+                        self.altitude_map.nav_timestamps = self.metrics.nav_timestamps
+                    if hasattr(self, 'footprint_map'):
+                        self.footprint_map.nav_timestamps = self.metrics.nav_timestamps
+                    if hasattr(self, 'visibility_analyzer'):
+                        self.visibility_analyzer.nav_timestamps = self.metrics.nav_timestamps
+                    if hasattr(self, 'highlight_selector'):
+                        self.highlight_selector.nav_timestamps = self.metrics.nav_timestamps
+                        
+                return True
+            else:
+                self.log_message(f"       ⚠ Failed to load navigation data")
+                return False
+                
         except Exception as e:
-            self.log_message(f"Error reading navigation file: {e}")
+            self.log_message(f"       ⚠ Navigation data error: {e}")
             return False
 
     def save_current_paths(self):
@@ -276,56 +405,33 @@ class ProcessingController:
                 self.log_message("  └─ ✗ Error: Metrics processor not initialized")
                 return
             
-            # The Metrics class likely has a different interface
-            # Let's call it correctly based on your existing codebase
             try:
-                # If Metrics class has a process method
-                if hasattr(self.metrics, 'process'):
-                    result = self.metrics.process(input_folder, output_folder)
-                # If it has analyze method
-                elif hasattr(self.metrics, 'analyze'):
-                    result = self.metrics.analyze(input_folder, output_folder)
-                # If it has generate_metrics method
-                elif hasattr(self.metrics, 'generate_metrics'):
-                    result = self.metrics.generate_metrics(input_folder, output_folder)
-                # If it has calculate_metrics method
-                elif hasattr(self.metrics, 'calculate_metrics'):
-                    result = self.metrics.calculate_metrics(input_folder, output_folder)
-                else:
-                    # Fallback - try to use whatever methods are available
-                    available_methods = [method for method in dir(self.metrics) 
-                                       if not method.startswith('_') and callable(getattr(self.metrics, method))]
-                    self.log_message(f"  └─ Available methods in Metrics: {available_methods}")
-                    self.log_message("  └─ ⚠ Using basic metrics calculation...")
-                    
-                    # Create a basic metrics CSV if no specific method exists
-                    import os
-                    import glob
-                    import pandas as pd
-                    
-                    image_files = []
-                    for ext in ['.jpg', '.jpeg', '.png', '.tiff', '.tif']:
-                        image_files.extend(glob.glob(os.path.join(input_folder, f'*{ext}')))
-                        image_files.extend(glob.glob(os.path.join(input_folder, f'*{ext.upper()}')))
-                    
-                    metrics_data = []
-                    for img_file in image_files:
-                        metrics_data.append({
-                            'filename': os.path.basename(img_file),
-                            'path': img_file,
-                            'processed': True
-                        })
-                    
-                    df = pd.DataFrame(metrics_data)
-                    output_file = os.path.join(output_folder, 'basic_metrics.csv')
-                    df.to_csv(output_file, index=False)
-                    result = True
+                # Call the correct method that actually processes the directory
+                extract_gps = any([
+                    self.location_map_var.get(), 
+                    self.histogram_var.get(),
+                    self.footprint_map_var.get(), 
+                    self.visibility_analyzer_var.get()
+                ])
                 
-                if result:
-                    self.log_message("  └─ ✓ Basic metrics analysis completed")
-                else:
-                    self.log_message("  └─ ✗ Basic metrics analysis failed")
-                    
+                processed_files, results = self.metrics.analyze_directory(
+                    input_folder,
+                    progress_callback=None,  # Skip progress for batch processing
+                    extract_gps=extract_gps
+                )
+                
+                # Log the summary results
+                for line in results:
+                    self.log_message(f"       {line}")
+                
+                # Save results to file
+                metrics_file = os.path.join(output_folder, "image_metrics.txt")
+                with open(metrics_file, "w") as f:
+                    f.write("\n".join(results))
+                
+                self.log_message(f"  └─ ✓ Basic metrics analysis completed - {processed_files} files processed")
+                self.log_message(f"       Results saved to: {metrics_file}")
+                
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in basic metrics: {e}")
                 
@@ -340,26 +446,37 @@ class ProcessingController:
             if not hasattr(self, 'altitude_map') or not self.altitude_map:
                 self.log_message("  └─ ✗ Error: AltitudeMap processor not initialized")
                 return
+                
+            if not hasattr(self, 'metrics') or not self.metrics or not self.metrics.gps_data:
+                self.log_message("  └─ ✗ Error: No GPS data available for location map")
+                return
             
             try:
-                # Try different method names that might exist
-                if hasattr(self.altitude_map, 'generate_map'):
-                    result = self.altitude_map.generate_map(input_folder, output_folder)
-                elif hasattr(self.altitude_map, 'create_location_map'):
-                    result = self.altitude_map.create_location_map(input_folder, output_folder)
-                elif hasattr(self.altitude_map, 'process'):
-                    result = self.altitude_map.process(input_folder, output_folder)
-                elif hasattr(self.altitude_map, 'generate'):
-                    result = self.altitude_map.generate(input_folder, output_folder)
-                else:
-                    available_methods = [method for method in dir(self.altitude_map) 
-                                       if not method.startswith('_') and callable(getattr(self.altitude_map, method))]
-                    self.log_message(f"  └─ Available methods in AltitudeMap: {available_methods}")
-                    self.log_message("  └─ ⚠ Skipping location map - no compatible method found")
-                    return
+                # Call the correct method with GPS data from metrics
+                map_file = self.altitude_map.create_location_map(
+                    self.metrics.gps_data,
+                    output_folder,
+                    metrics=self.metrics
+                )
                 
-                if result:
-                    self.log_message("  └─ ✓ Location map generated successfully")
+                if map_file and os.path.exists(map_file):
+                    self.log_message(f"  └─ ✓ Location map created: {os.path.basename(map_file)}")
+                    
+                    # Also create GIS exports
+                    try:
+                        result_files = self.altitude_map.export_to_gis_formats(
+                            self.metrics.gps_data,
+                            output_folder
+                        )
+                        
+                        if 'csv' in result_files:
+                            self.log_message(f"       CSV export: {os.path.basename(result_files['csv'])}")
+                        
+                        if 'shapefile' in result_files:
+                            self.log_message(f"       Shapefile export: {os.path.basename(result_files['shapefile'])}")
+                            
+                    except Exception as export_error:
+                        self.log_message(f"       Warning: GIS export failed: {export_error}")
                 else:
                     self.log_message("  └─ ✗ Location map generation failed")
                     
@@ -377,24 +494,20 @@ class ProcessingController:
             if not hasattr(self, 'altitude_map') or not self.altitude_map:
                 self.log_message("  └─ ✗ Error: AltitudeMap processor not initialized")
                 return
+                
+            if not hasattr(self, 'metrics') or not self.metrics or not self.metrics.gps_data:
+                self.log_message("  └─ ✗ Error: No GPS data available for histogram")
+                return
             
             try:
-                # Try different method names for histogram generation
-                if hasattr(self.altitude_map, 'generate_histogram'):
-                    result = self.altitude_map.generate_histogram(input_folder, output_folder)
-                elif hasattr(self.altitude_map, 'create_altitude_histogram'):
-                    result = self.altitude_map.create_altitude_histogram(input_folder, output_folder)
-                elif hasattr(self.altitude_map, 'histogram'):
-                    result = self.altitude_map.histogram(input_folder, output_folder)
-                else:
-                    available_methods = [method for method in dir(self.altitude_map) 
-                                       if not method.startswith('_') and callable(getattr(self.altitude_map, method))]
-                    self.log_message(f"  └─ Available methods in AltitudeMap: {available_methods}")
-                    self.log_message("  └─ ⚠ Skipping histogram - no compatible method found")
-                    return
+                # Call the correct method with GPS data from metrics
+                histogram_file = self.altitude_map.create_altitude_histogram(
+                    self.metrics.gps_data,
+                    output_folder
+                )
                 
-                if result:
-                    self.log_message("  └─ ✓ Altitude histogram created successfully")
+                if histogram_file and os.path.exists(histogram_file):
+                    self.log_message(f"  └─ ✓ Altitude histogram created: {os.path.basename(histogram_file)}")
                 else:
                     self.log_message("  └─ ✗ Altitude histogram creation failed")
                     
@@ -412,26 +525,38 @@ class ProcessingController:
             if not hasattr(self, 'footprint_map') or not self.footprint_map:
                 self.log_message("  └─ ✗ Error: FootprintMap processor not initialized")
                 return
+                
+            if not hasattr(self, 'metrics') or not self.metrics or not self.metrics.gps_data:
+                self.log_message("  └─ ✗ Error: No GPS data available for footprint map")
+                return
             
             try:
-                # Try different method names for footprint map
-                if hasattr(self.footprint_map, 'generate_map'):
-                    result = self.footprint_map.generate_map(input_folder, output_folder)
-                elif hasattr(self.footprint_map, 'create_footprint_map'):
-                    result = self.footprint_map.create_footprint_map(input_folder, output_folder)
-                elif hasattr(self.footprint_map, 'process'):
-                    result = self.footprint_map.process(input_folder, output_folder)
-                elif hasattr(self.footprint_map, 'generate'):
-                    result = self.footprint_map.generate(input_folder, output_folder)
-                else:
-                    available_methods = [method for method in dir(self.footprint_map) 
-                                       if not method.startswith('_') and callable(getattr(self.footprint_map, method))]
-                    self.log_message(f"  └─ Available methods in FootprintMap: {available_methods}")
-                    self.log_message("  └─ ⚠ Skipping footprint map - no compatible method found")
-                    return
+                # Set altitude threshold
+                self.footprint_map.altitude_threshold = self.altitude_threshold
                 
-                if result:
-                    self.log_message("  └─ ✓ Footprint map generated successfully")
+                # Get navigation file path if available
+                nav_file_path = None
+                if hasattr(self, 'nav_path') and self.nav_path.get():
+                    nav_file_path = self.nav_path.get()
+                
+                # Call the correct method with GPS data from metrics
+                footprint_file = self.footprint_map.create_footprint_map(
+                    self.metrics.gps_data,
+                    output_folder,
+                    nav_file_path=nav_file_path,
+                    filename="image_footprints_map.png"
+                )
+                
+                if footprint_file and os.path.exists(footprint_file):
+                    self.log_message(f"  └─ ✓ Footprint map created: {os.path.basename(footprint_file)}")
+                    
+                    # Copy overlap statistics if available
+                    if hasattr(self.footprint_map, 'vertical_overlap_stats'):
+                        self.metrics.vertical_overlap_stats = self.footprint_map.vertical_overlap_stats
+                    if hasattr(self.footprint_map, 'horizontal_overlap_stats'):
+                        self.metrics.horizontal_overlap_stats = self.footprint_map.horizontal_overlap_stats
+                    if hasattr(self.footprint_map, 'overall_overlap_stats'):
+                        self.metrics.overall_overlap_stats = self.footprint_map.overall_overlap_stats
                 else:
                     self.log_message("  └─ ✗ Footprint map generation failed")
                     
@@ -450,22 +575,46 @@ class ProcessingController:
                 self.log_message("  └─ ✗ Error: VisibilityAnalyzer not initialized")
                 return
             
+            # Verify input folder exists and has images
+            if not input_folder or not os.path.exists(input_folder):
+                self.log_message(f"  └─ ✗ Error: Input folder does not exist: {input_folder}")
+                return
+            
+            # Count images in input folder
+            image_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+            image_count = 0
+            for root, dirs, files in os.walk(input_folder):
+                for file in files:
+                    if file.lower().endswith(image_extensions):
+                        image_count += 1
+            
+            if image_count == 0:
+                self.log_message(f"  └─ ✗ Error: No images found in input folder: {input_folder}")
+                return
+            
+            self.log_message(f"       Found {image_count} images in input folder")
+            
             try:
-                # Set up the log callback for the visibility analyzer
-                self.visibility_analyzer.log_message = self.log_message
-                
                 # Get model path
                 model_path = None
-                if self.model_type_var.get() == "model":
-                    model_path = self.model_path.get()
+                if hasattr(self, 'model_type_var') and self.model_type_var.get() == "model":
+                    if hasattr(self, 'model_path'):
+                        model_path = self.model_path.get()
                 else:
-                    model_path = self.training_path.get()
+                    if hasattr(self, 'training_path'):
+                        model_path = self.training_path.get()
                 
                 if not model_path:
-                    self.log_message("  └─ ✗ No model path specified")
-                    return
+                    # Use default model path
+                    default_model = "v_a_pre-trained_models/visibility_model_20250402.h5"
+                    if os.path.exists(default_model):
+                        model_path = default_model
+                        self.log_message(f"       Using default model: {default_model}")
+                    else:
+                        self.log_message("  └─ ✗ No model path specified and default model not found")
+                        return
                 
-                self.log_message("  └─ Loading visibility model...")
+                self.log_message("       Loading visibility model...")
                 
                 # Load the model
                 success = self.visibility_analyzer.load_or_train_model(model_path)
@@ -473,23 +622,40 @@ class ProcessingController:
                     self.log_message("  └─ ✗ Failed to load visibility model")
                     return
                 
-                self.log_message("  └─ ✓ Model loaded, analyzing images...")
+                self.log_message("       ✓ Model loaded, analyzing images...")
                 
-                # Run analysis
+                # Run analysis - pass empty list to let it scan the input folder
                 success, results = self.visibility_analyzer.analyze_images(
-                    [],  # Let it scan the input folder
+                    [],  # Empty list means scan input folder
                     output_folder,
                     altitude_threshold=self.altitude_threshold
                 )
                 
                 if success:
                     self.log_message("  └─ ✓ Visibility analysis completed successfully")
+                    
+                    # Log summary statistics if available
+                    if isinstance(results, dict):
+                        if 'total_images_found' in results:
+                            self.log_message(f"       Found {results['total_images_found']} total images")
+                        if 'images_analyzed' in results:
+                            self.log_message(f"       Analyzed {results['images_analyzed']} images")
+                        if 'by_category' in results:
+                            for category, count in results['by_category'].items():
+                                self.log_message(f"       {category}: {count} images")
+                                
+                        # Verify the CSV was created
+                        csv_path = os.path.join(output_folder, "visibility_results.csv")
+                        if os.path.exists(csv_path):
+                            self.log_message(f"       Results saved to: visibility_results.csv")
+                        else:
+                            self.log_message(f"       Warning: visibility_results.csv not found")
                 else:
                     self.log_message("  └─ ✗ Visibility analysis failed")
                     
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in visibility analysis: {e}")
-                self.log_message(f"       {traceback.format_exc()}")
+                self.log_message(f"       Traceback: {traceback.format_exc()}")
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in visibility analysis: {e}")
@@ -503,33 +669,59 @@ class ProcessingController:
                 self.log_message("  └─ ✗ Error: HighlightSelector not initialized")
                 return
             
+            # Verify input folder exists and has images
+            if not input_folder or not os.path.exists(input_folder):
+                self.log_message(f"  └─ ✗ Error: Input folder does not exist: {input_folder}")
+                return
+            
+            # Count images in input folder to verify we have something to work with
+            image_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+            image_count = 0
+            for root, dirs, files in os.walk(input_folder):
+                for file in files:
+                    if file.lower().endswith(image_extensions):
+                        image_count += 1
+            
+            self.log_message(f"       Found {image_count} images in input folder")
+            
+            if image_count == 0:
+                self.log_message(f"  └─ ✗ Error: No images found in input folder")
+                return
+            
             try:
-                # Try different method names for highlight selection
-                if hasattr(self.highlight_selector, 'select_highlights'):
-                    result = self.highlight_selector.select_highlights(
-                        input_folder, 
-                        output_folder,
-                        count=10,
-                        altitude_threshold=self.altitude_threshold
-                    )
-                elif hasattr(self.highlight_selector, 'process'):
-                    result = self.highlight_selector.process(input_folder, output_folder)
-                elif hasattr(self.highlight_selector, 'generate'):
-                    result = self.highlight_selector.generate(input_folder, output_folder)
-                else:
-                    available_methods = [method for method in dir(self.highlight_selector) 
-                                       if not method.startswith('_') and callable(getattr(self.highlight_selector, method))]
-                    self.log_message(f"  └─ Available methods in HighlightSelector: {available_methods}")
-                    self.log_message("  └─ ⚠ Skipping highlight selection - no compatible method found")
-                    return
+                # The highlight selector will automatically check for visibility results
+                # in the output folder, so we don't need to pass them explicitly
+                # This maintains the dual functionality you want
                 
-                if result:
-                    self.log_message("  └─ ✓ Highlight selection completed successfully")
+                self.log_message(f"       Processing images from: {input_folder}")
+                
+                # Call the highlight selector - it will handle both modes internally
+                highlight_paths = self.highlight_selector.select_highlights(
+                    input_folder,  # Input folder with images
+                    output_folder, # Output folder (where it will look for visibility results)
+                    count=10,      # Number of highlights to select
+                    progress_callback=None,  # Skip progress for batch processing
+                    altitude_threshold=self.altitude_threshold,
+                    min_altitude_threshold=2.0,
+                    visibility_results=None  # Let it find its own visibility results
+                )
+                
+                if highlight_paths and len(highlight_paths) > 0:
+                    self.log_message(f"  └─ ✓ Selected {len(highlight_paths)} highlight images")
+                    self.log_message(f"       Highlights saved to: highlight_images/")
+                    
+                    # Log what mode was used based on the selector's internal logic
+                    vis_csv_path = os.path.join(output_folder, "visibility_results.csv")
+                    if os.path.exists(vis_csv_path):
+                        self.log_message(f"       Used visibility analysis + image metrics mode")
+                    else:
+                        self.log_message(f"       Used image metrics only mode")
                 else:
-                    self.log_message("  └─ ✗ Highlight selection failed")
+                    self.log_message("  └─ ✗ No highlight images were selected")
                     
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in highlight selection: {e}")
+                self.log_message(f"       Traceback: {traceback.format_exc()}")
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in highlight selection: {e}")
@@ -765,8 +957,21 @@ class ProcessingController:
                                 except Exception as nav_error:
                                     self.log_message(f"Job {job_num}: ⚠ Navigation data error: {nav_error}")
                             
-                            # Process imagery stages
+                            # IMPORTANT: Process basic metrics FIRST to populate GPS data
                             try:
+                                self.log_message(f"Job {job_num}: Extracting image metadata...")
+                                
+                                # Always extract GPS data for other stages
+                                extract_gps = True
+                                processed_files, results = self.metrics.analyze_directory(
+                                    input_folder,
+                                    progress_callback=None,
+                                    extract_gps=extract_gps
+                                )
+                                
+                                self.log_message(f"Job {job_num}: ✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
+                                
+                                # Process imagery stages only if we have GPS data for maps
                                 imagery_stages = self.get_required_imagery_stages()
                                 self.log_message(f"Job {job_num}: Processing {len(imagery_stages)} imagery stages...")
                                 
@@ -782,6 +987,7 @@ class ProcessingController:
                                             self.log_message(f"Job {job_num}: Continuing with next stage...")
                                 
                                 self.log_message(f"Job {job_num}: ✓ Imagery processing completed ({completed_stages}/{len(imagery_stages)} stages successful)")
+                                
                             except Exception as imagery_error:
                                 self.log_message(f"Job {job_num}: ✗ Error during imagery processing: {imagery_error}")
                                 self.log_message(traceback.format_exc())
