@@ -1,13 +1,19 @@
 # VOYIS First Look Metrics
 
-**Version:** 1.4.0  
-**Last Updated:** April 2025  
-**Author:** Mike Bollinger  
+<div align="center">
+  <img src="src/utils/NOAA_Voyis_Logo.png" alt="NOAA VOYIS Logo" width="200"/>
+</div>
+
+**Version:** 1.5.0  
+**Last Updated:** June 2025  
+**Author:** Mike Bollinger (Imagery), Jeff Coogan (LLS)
 
 ## Overview
 The VOYIS First Look Metrics application is designed to calculate summary statistics about a folder of images collected by an AUV. It analyzes processed stills and raw images, providing comprehensive metrics about image coverage, overlap, and quality. The application features a user-friendly graphical interface for selecting input and output folders and displays real-time processing status.
 
 ## Features
+
+### Core Image Analysis
 - **Image Counting and Classification**
   - Count and categorize processed stills and raw images
   - Calculate total storage size by image type
@@ -22,6 +28,13 @@ The VOYIS First Look Metrics application is designed to calculate summary statis
   - Horizontal overlap between adjacent survey lines
   - Overall overlap count showing total overlapping images for each footprint
   - Color-coded visualization maps for all overlap types (vertical, horizontal, overall)
+
+### Laser Line Scan Data Analysis
+- **LLS (Laser Line Scan) Data Processing**
+  - Integrated processing of laser line scan data with navigation
+  - Support for Phins navigation data integration
+  - Automated LLS data quality assessment and filtering
+  - Batch processing capabilities for multiple datasets
   
 - **Visibility Analysis**
   - Machine learning-based classification of underwater image visibility
@@ -29,69 +42,56 @@ The VOYIS First Look Metrics application is designed to calculate summary statis
   - Random sampling of images below specified altitude threshold
   - CSV output with visibility metrics and geolocation data
   - Shapefile export with visibility information for GIS integration
-  - Visualization of randomly selected sample locations
+  - Histogram visualization with example images from each category
   
 - **Highlight Selection**
-  - Automatic selection of highlight images based on quality metrics 
+  - Automatic selection of highlight images based on quality metrics
+  - Integration with visibility analysis results
   - Identification of representative imagery across survey area
   - HTML gallery of selected highlights with metadata
   
+- **Batch Processing**
+  - Process multiple dive datasets simultaneously
+  - Configurable processing options for each dataset
+  - Progress tracking and detailed logging
+  - Error handling and recovery for robust processing
+
+### User Interface
+- **Intuitive GUI**
+  - Easy folder and file selection
+  - Real-time progress tracking
+  - Detailed processing logs
+  - Configurable processing options
+  
 - **Highlight Panel Creator**
   - Creation of multi-image highlight panels for reports
-  - Support for 2, 4, or 6 images in a publication-ready format
+  - Support for 2, 4, or 6 images in publication-ready format
   - Automatic extraction of GPS metadata from images
   - Configurable 2-column layout optimized for portrait style reports
   - Drag-and-drop interface for easy image management
-  
-- **Export Capabilities**
-  - Comprehensive summary report in text format
-  - CSV export of image metadata with overlap statistics
-  - Shapefile export for GIS integration including overlap metrics
-  - Visualization plots showing coverage and overlap
-  - High resolution image panels for inclusion in reports
 
-- **User Interface**
-  - Intuitive GUI for input/output folder selection
-  - Real-time processing status updates
-  - Error handling with detailed diagnostics
-  - Configurable altitude threshold for filtering images
-
-## Project Structure
-```
-VOYIS_FirstLookMetrics/ 
-├── src/ 
-│ ├── main.py # Entry point of the application 
-│ ├── gui/ 
-│ │ ├── init.py 
-│ │ └── app_window.py # Defines the GUI window 
-│ ├── models/ 
-│ │ ├── init.py 
-│ │ ├── metrics.py # Summary statistics for processed images 
-│ │ ├── altitude_map.py # Creates location maps and altitude visualizations 
-│ │ ├── footprint_map.py # Calculates and visualizes image footprints and overlap 
-│ │ ├── visibility_analyzer.py # ML-based visibility classification 
-│ │ └── highlight_selector.py # Analysis for selecting highlight images 
-│ └── utils/ 
-│ ├── init.py 
-│ ├── path_utils.py # Utilities for path and file management 
-│ └── highlight_panel_creator.py # Creates highlight image panels 
-├── requirements.txt # Project dependencies 
-└── README.md # Project documentation
-```
+## Recent Updates (v1.5.0)
+- **Enhanced LLS Processing**: Improved integration with navigation data and batch processing
+- **Corrected Visibility Categories**: Updated to use proper model categories (zero_visibility, low_visibility, good_visibility, great_visibility)
+- **Improved Batch Processing**: Better error handling and progress tracking
+- **Enhanced Highlight Selection**: Better image quality metrics and visibility integration
+- **UI Improvements**: LLS processing now enabled by default, better progress feedback
 
 ## System Requirements
 - Python 3.8 or higher
-- Required libraries: tkinter, PIL/Pillow, numpy, matplotlib, geopandas
+- Required libraries: tkinter, PIL/Pillow, numpy, matplotlib, pandas
 - Optional: 
+  - geopandas for advanced mapping and GIS features
   - rtree for improved spatial query performance
   - TensorFlow for visibility analysis
   - shapely for advanced spatial operations
   - tkinterdnd2 for drag-and-drop functionality in highlight panel creator
+  - scipy for enhanced image metrics
 
 ## Installation
 1. Clone the repository:
    ```
-   git clone <repository-url>
+   git clone https://github.com/Mike-Bollinger/VOYIS_FirstLookMetrics.git
    ```
 2. Navigate to the project directory:
    ```
@@ -105,9 +105,9 @@ VOYIS_FirstLookMetrics/
    ```
    pip install tensorflow
    ```
-5. Optional: Install tkinterdnd2 for drag-and-drop support:
+5. Optional: Install additional packages for enhanced functionality:
    ```
-   pip install tkinterdnd2
+   pip install geopandas rtree shapely tkinterdnd2 scipy
    ```
 
 ## Usage
@@ -115,53 +115,63 @@ VOYIS_FirstLookMetrics/
    ```
    python src/main.py
    ```
-2. Use the GUI to select:
-   - Input folder containing VOYIS images
-   - Output folder for the results
-   - Configure analysis options and select processing steps
-   - Set altitude threshold for filtering (default: 8.0m)
-   - Select navigation file for improved footprint orientation (optional)
-   - Choose pre-trained visibility model or training data directory
-3. Click "Process Images" and monitor progress in the status area
-4. Examine the generated reports and visualizations in the output folder
-5. Use the highlight panel creator for creating report-ready image panels:
-   - Launch from the Tools menu
-   - Select 2, 4, or 6 images layout
-   - Add images via the file dialog or drag-and-drop
-   - Save the panel as PNG, JPEG, or PDF
+2. Select input folders for imagery and/or LLS data
+3. Choose output folder for results
+4. Select desired processing options:
+   - **LLS Processing**: Process laser line scan data
+   - **Basic Metrics**: Calculate image statistics and metadata
+   - **Location Maps**: Generate GPS-based visualizations
+   - **Altitude Histograms**: Analyze altitude distributions
+   - **Footprint Maps**: Calculate image coverage and overlaps
+   - **Visibility Analysis**: ML-based visibility classification
+   - **Highlight Selection**: Automatic selection of best images
+5. Click "Process" to start analysis
+6. Monitor progress and review results in the output folder
 
 ## Output Files
-The application generates the following outputs:
-- `image_metrics.txt`: Text file with comprehensive statistics
-- `image_locations.csv`: CSV file with image metadata and GPS coordinates
-- `image_locations_map.png`: Map showing image locations colored by altitude
-- `altitude_histogram.png`: Histogram showing the distribution of image altitudes
-- `image_footprints.csv`: CSV file with detailed image metadata and overlap statistics
-- `image_footprints.shp`: Shapefile for GIS applications with overlap metrics as attributes
-- `image_footprints_map.png`: Map showing image coverage with footprints
-- `vertical_overlap_map.png`: Map showing overlap between sequential images
-- `horizontal_overlap_map.png`: Map showing overlap between adjacent survey lines
-- `overall_overlap_map.png`: Map showing total number of overlapping images per footprint
-- `visibility_results.csv`: CSV file with visibility classifications and confidence scores
-- `selected_images_map.png`: Map showing selected vs. non-selected images for visibility analysis
-- `shapefiles/selected_images.shp`: Shapefile of randomly selected images with visibility data
-- `highlight_images/`: Directory containing selected highlight images
-- `highlight_images/highlights.html`: Interactive HTML gallery of highlight images
-- `highlight_images/top_highlights_panel.png`: Auto-generated panel with top highlight images
+The application generates comprehensive outputs including:
+
+### Core Outputs
+- `image_metrics.txt`: Comprehensive statistics summary
+- `image_locations.csv`: Image metadata with GPS coordinates
+- `image_locations_map.png`: Location map colored by altitude
+- `altitude_histogram.png`: Altitude distribution visualization
+
+### Advanced Outputs
+- `image_footprints.csv`: Detailed metadata with overlap statistics
+- `image_footprints.shp`: GIS shapefile with overlap metrics
+- `image_footprints_map.png`: Coverage map with footprints
+- `vertical_overlap_map.png`: Sequential image overlap visualization
+- `horizontal_overlap_map.png`: Adjacent survey line overlap
+- `overall_overlap_map.png`: Total overlap count per footprint
+
+### Visibility Analysis
+- `visibility_results.csv`: Visibility classifications and confidence scores
+- `visibility_analysis.png`: Distribution histogram with example images
+- `selected_images_map.png`: Visualization of analyzed images
+
+### Highlight Selection
+- `highlight_images/`: Directory with selected highlight images
+- `highlight_images/highlights.html`: Interactive HTML gallery
+- `highlight_images/top_highlights_panel.png`: Publication-ready image panel
+
+### LLS Processing
+- `Voyis_QuickLook_Summary.txt`: LLS processing summary and statistics
+- Various LLS data products and quality assessment files
 
 ## Version History
-- **1.4.0** - Added highlight panel creator, and highlight image selection tools
-- **1.3.0** - Added ML-based visibility analysis, improved workflow organization, and added shapefile exports
+- **1.5.0** - Enhanced LLS integration, corrected visibility categories, improved batch processing
+- **1.4.0** - Added highlight panel creator and highlight image selection tools
+- **1.3.0** - Added ML-based visibility analysis, improved workflow organization, and shapefile exports
 - **1.2.0** - Added overall overlap analysis and optimized spatial processing
 - **1.1.0** - Added horizontal overlap analysis and GIS exports
 - **1.0.0** - Initial release with basic image metrics and vertical overlap
 
 ## Known Issues
 - Processing large datasets (>10,000 images) may be slow, especially for overlap calculations
-- Requires geopandas for advanced mapping features
-- TensorFlow needed for visibility analysis
-- The visibility analysis may need additional training data for optimal performance in varied environments
-- Highlight panel creator requires tkinterdnd2 for drag-and-drop functionality
+- Visibility analysis requires pre-trained model (not included in repository due to size)
+- Some advanced features require optional dependencies
+- Batch processing of very large datasets may require significant memory
 
 ## Contributing
 Contributions are welcome! Please submit a pull request or open an issue for any enhancements or bug fixes.
