@@ -75,7 +75,7 @@ class AltitudeMap:
         return combined_outliers.tolist()
     
     def create_location_map(self, gps_data: List[Dict], output_path: str, 
-                       filename: str = "image_locations_map.png",
+                       filename: str = None,
                        metrics=None) -> Optional[str]:
         """Create location map with outlier handling"""
         if not gps_data:
@@ -259,7 +259,9 @@ class AltitudeMap:
                 
                 plt.tight_layout()
                 
-                # Save plot
+                # Save plot with standardized naming
+                if filename is None:
+                    filename = "Image_Locations_Map.png"
                 output_file = os.path.join(output_path, filename)
                 plt.savefig(output_file, dpi=300, bbox_inches='tight')
                 plt.close(fig)  # Close the figure to free memory
@@ -277,7 +279,7 @@ class AltitudeMap:
             return None
     
     def create_altitude_histogram(self, gps_data: List[Dict], output_path: str, 
-                         filename: str = "altitude_histogram.png",
+                         filename: str = None,
                          max_display_altitude: float = 50.0) -> Optional[str]:
         """
         Create a histogram of image altitudes
@@ -452,7 +454,9 @@ class AltitudeMap:
             # Adjust spacing manually
             fig.subplots_adjust(left=0.12, right=0.95, top=0.95, bottom=0.08, hspace=0.05)
             
-            # Save plot
+            # Save plot with standardized naming
+            if filename is None:
+                filename = "Image_Altitude_Histogram.png"
             output_file = os.path.join(output_path, filename)
             plt.savefig(output_file, dpi=300, bbox_inches='tight')
             plt.close(fig)  # Close the figure to free memory
@@ -467,7 +471,7 @@ class AltitudeMap:
             return None
     
     def export_to_gis_formats(self, gps_data: List[Dict], output_path: str, 
-                             csv_filename: str = "image_locations.csv",
+                             csv_filename: str = None,
                              shapefile_filename: str = "image_locations.shp") -> Dict[str, str]:
         """Export GPS data to CSV and Shapefile formats"""
         result_files = {}

@@ -59,6 +59,11 @@ class AppWindow(UIComponents, ProcessingController):
         self.lls_path = tk.StringVar()
         self.phins_nav_path = tk.StringVar()
         
+        # Navigation processing paths (for plotting - text files with heave data)
+        self.nav_processing_var = tk.BooleanVar(value=False)
+        self.nav_plot_file_path = tk.StringVar()  # PHINS file
+        self.nav_state_file_path = tk.StringVar()  # NAV_STATE file
+        
         # Batch processing
         self.batch_mode = False
         self.batch_csv_path = tk.StringVar()
@@ -90,7 +95,7 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Control variables - DEFAULT TO 9.0 METERS
         self.altitude_threshold = 9.0
-        self.low_altitude_threshold = 5.0
+        self.low_altitude_threshold = 4.0
         self.threshold_var = tk.StringVar(value=str(self.altitude_threshold))
         self.progress_var = tk.DoubleVar()
         
@@ -217,7 +222,7 @@ class AppWindow(UIComponents, ProcessingController):
         # Help text
         help_text = ttk.Label(
             self.batch_csv_frame,
-            text="CSV columns: input_folder*, output_folder*, nav_file, lls_folder, phins_nav_file (*required)",
+            text="CSV columns: input_folder*, output_folder*, nav_file, nav_plot_file, lls_folder, phins_nav_file (*required)",
             font=('TkDefaultFont', 8),
             foreground='gray'
         )
@@ -235,9 +240,31 @@ class AppWindow(UIComponents, ProcessingController):
         # Store reference to all input widgets for batch mode greying out
         self.input_widgets = []
         
+        # Navigation Processing Input Section (for plotting)
+        nav_frame = ttk.LabelFrame(self.input_frame, text="Navigation Data Plotting", padding="5")
+        nav_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        nav_frame.columnconfigure(1, weight=1)
+        
+        # NAV_STATE file selection
+        ttk.Label(nav_frame, text="NAV_STATE Text File:").grid(row=0, column=0, sticky='w')
+        self.nav_state_entry = ttk.Entry(nav_frame, textvariable=self.nav_state_file_path, width=40)
+        self.nav_state_entry.grid(row=0, column=1, padx=5, sticky='ew')
+        self.nav_state_button = ttk.Button(nav_frame, text="Browse...", command=self.select_nav_state_file)
+        self.nav_state_button.grid(row=0, column=2)
+        
+        # PHINS file selection for heave data
+        ttk.Label(nav_frame, text="PHINS INS Text File:").grid(row=1, column=0, sticky='w')
+        self.nav_plot_entry = ttk.Entry(nav_frame, textvariable=self.nav_plot_file_path, width=40)
+        self.nav_plot_entry.grid(row=1, column=1, padx=5, sticky='ew')
+        self.nav_plot_button = ttk.Button(nav_frame, text="Browse...", command=self.select_nav_plot_file)
+        self.nav_plot_button.grid(row=1, column=2)
+        
+        # Add nav plot widgets to list
+        self.input_widgets.extend([self.nav_state_entry, self.nav_state_button, self.nav_plot_entry, self.nav_plot_button])
+        
         # LLS Input Section
         lls_frame = ttk.LabelFrame(self.input_frame, text="Laser Data (LLS) Inputs", padding="5")
-        lls_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        lls_frame.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         lls_frame.columnconfigure(1, weight=1)
         
         # LLS folder selection
@@ -248,7 +275,7 @@ class AppWindow(UIComponents, ProcessingController):
         self.lls_button.grid(row=0, column=2)
         
         # Phins Nav file selection
-        ttk.Label(lls_frame, text="Phins Nav File:").grid(row=1, column=0, sticky='w')
+        ttk.Label(lls_frame, text="PhinsData Bin File:").grid(row=1, column=0, sticky='w')
         self.phins_nav_entry = ttk.Entry(lls_frame, textvariable=self.phins_nav_path, width=40)
         self.phins_nav_entry.grid(row=1, column=1, padx=5, sticky='ew')
         self.phins_nav_button = ttk.Button(lls_frame, text="Browse...", command=self.select_phins_nav_file)
@@ -259,7 +286,7 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Imagery Input Section
         imagery_frame = ttk.LabelFrame(self.input_frame, text="Imagery Inputs", padding="5")
-        imagery_frame.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        imagery_frame.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         imagery_frame.columnconfigure(1, weight=1)
         
         # Input folder selection
@@ -270,7 +297,7 @@ class AppWindow(UIComponents, ProcessingController):
         self.input_button.grid(row=0, column=2)
         
         # Vehicle Nav file selection
-        ttk.Label(imagery_frame, text="Vehicle Nav File:").grid(row=1, column=0, sticky='w')
+        ttk.Label(imagery_frame, text="Dive Nav File:").grid(row=1, column=0, sticky='w')
         self.nav_entry = ttk.Entry(imagery_frame, textvariable=self.nav_path, width=40)
         self.nav_entry.grid(row=1, column=1, padx=5, sticky='ew')
         self.nav_button = ttk.Button(imagery_frame, text="Browse...", command=self.select_nav_file)
@@ -281,7 +308,7 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Output folder selection
         output_frame = ttk.Frame(self.input_frame)
-        output_frame.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(10, 0))
+        output_frame.grid(row=3, column=0, columnspan=3, sticky='ew', pady=(10, 0))
         output_frame.columnconfigure(1, weight=1)
         
         ttk.Label(output_frame, text="Output Folder:").grid(row=0, column=0, sticky='w')
@@ -299,9 +326,21 @@ class AppWindow(UIComponents, ProcessingController):
         self.functions_frame.pack(fill=tk.X, pady=(0, 10), padx=10)
         self.functions_frame.columnconfigure(0, weight=1)
         
+        # Navigation Processing Section
+        nav_section = ttk.LabelFrame(self.functions_frame, text="Navigation Data Plotting", padding="5")
+        nav_section.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        
+        self.nav_processing_checkbox = ttk.Checkbutton(
+            nav_section, 
+            text="Process Navigation Data for Plotting", 
+            variable=self.nav_processing_var,
+            command=self.update_all_checkbox
+        )
+        self.nav_processing_checkbox.grid(row=0, column=0, sticky='w')
+        
         # LLS Processing Section
         lls_section = ttk.LabelFrame(self.functions_frame, text="Laser Data Processing", padding="5")
-        lls_section.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        lls_section.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         
         self.lls_processing_checkbox = ttk.Checkbutton(
             lls_section, 
@@ -313,7 +352,7 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Imagery Processing Section
         imagery_section = ttk.LabelFrame(self.functions_frame, text="Imagery Processing", padding="5")
-        imagery_section.grid(row=1, column=0, columnspan=3, sticky='ew')
+        imagery_section.grid(row=2, column=0, columnspan=3, sticky='ew')
         
         # "All" checkbox for imagery functions
         self.all_checkbox = ttk.Checkbutton(
@@ -511,6 +550,34 @@ class AppWindow(UIComponents, ProcessingController):
             self.nav_path.set(file_path)
             self.log_message(f"Navigation file set to: {file_path}")
 
+    def select_nav_plot_file(self):
+        """Select PHINS INS file for plotting (optional heave data)"""
+        file_path = filedialog.askopenfilename(
+            title="Select PHINS INS File (Optional - for heave data)",
+            filetypes=[
+                ("Text Files", "*.txt"),
+                ("CSV Files", "*.csv"),
+                ("All Files", "*.*")
+            ]
+        )
+        if file_path:
+            self.nav_plot_file_path.set(file_path)
+            self.log_message(f"PHINS INS file set to: {file_path}")
+
+    def select_nav_state_file(self):
+        """Select NAV_STATE file for navigation plotting"""
+        file_path = filedialog.askopenfilename(
+            title="Select NAV_STATE Text File",
+            filetypes=[
+                ("Text Files", "*.txt"),
+                ("CSV Files", "*.csv"),
+                ("All Files", "*.*")
+            ]
+        )
+        if file_path:
+            self.nav_state_file_path.set(file_path)
+            self.log_message(f"NAV_STATE file set to: {file_path}")
+
     def select_visibility_file(self, file_type):
         """Select model file or training data directory for visibility analyzer"""
         if file_type == "model":
@@ -694,13 +761,18 @@ class AppWindow(UIComponents, ProcessingController):
                         '',  # Optional - can be empty
                         'C:/path/to/nav/file3.txt'
                     ],
+                    'nav_plot_file': [
+                        'C:/path/to/nav_plot/file1.txt',
+                        'C:/path/to/nav_plot/file2.txt',
+                        ''  # Optional - can be empty if no navigation plotting needed
+                    ],
                     'lls_folder': [
                         'C:/path/to/lls/folder1',
                         'C:/path/to/lls/folder2',
                         ''  # Optional - can be empty if no LLS processing needed
                     ],
                     'phins_nav_file': [
-                        'C:/path/to/phins/nav1.txt',
+                        'C:/path/to/phins/nav1.bin',
                         'C:/path/to/phins/nav2.bin',
                         ''  # Optional - can be empty if no LLS processing needed
                     ]
@@ -715,7 +787,7 @@ class AppWindow(UIComponents, ProcessingController):
                     f"Batch processing CSV template created at:\n{file_path}\n\n"
                     "Edit this file with your actual folder paths, then load it for batch processing.\n\n"
                     "Required columns: input_folder, output_folder\n"
-                    "Optional columns: nav_file, lls_folder, phins_nav_file"
+                    "Optional columns: nav_file, nav_plot_file, lls_folder, phins_nav_file"
                 )
                 
             except Exception as e:

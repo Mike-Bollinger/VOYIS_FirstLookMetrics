@@ -478,7 +478,7 @@ class FootprintMap:
     
     def create_footprint_map(self, gps_data: List[Dict], output_path: str, 
                             nav_file_path: str = None,
-                            filename: str = "image_footprints_map.png") -> Optional[str]:
+                            filename: str = None) -> Optional[str]:
         """
         Create a map showing image footprints on the seafloor
         
@@ -682,7 +682,9 @@ class FootprintMap:
         # Adjust layout to accommodate the longer tick labels
         plt.tight_layout()
         
-        # Save plot
+        # Save plot with standardized naming
+        if filename is None:
+            filename = "Image_Footprints_Map.png"
         output_file = os.path.join(output_path, filename)
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
         plt.close()
@@ -839,7 +841,6 @@ class FootprintMap:
                     overlap_data.append(overlap_info)
                     total_overlap_area += intersection_area
                     total_overlap_count += 1
-            
             # Calculate statistics
             if total_overlap_count > 0:
                 overlap_percentages = [d['overlap_percent'] for d in overlap_data]
@@ -1261,7 +1262,7 @@ class FootprintMap:
             return None
 
     def create_vertical_overlap_map(self, footprints: List[Dict], output_path: str, 
-                                  filename: str = "vertical_overlap_map.png") -> Optional[str]:
+                                  filename: str = None) -> Optional[str]:
         """
         Create a map showing vertical overlap between sequential images
         
@@ -1373,7 +1374,9 @@ class FootprintMap:
             
             plt.tight_layout()
             
-            # Save plot
+            # Save plot with standardized naming
+            if filename is None:
+                filename = "Image_Vertical_Overlap_Map.png"
             output_file = os.path.join(output_path, filename)
             plt.savefig(output_file, dpi=300, bbox_inches='tight')
             plt.close(fig)
@@ -1386,7 +1389,7 @@ class FootprintMap:
             return None
 
     def create_horizontal_overlap_map(self, footprints: List[Dict], output_path: str, 
-                                   filename: str = "horizontal_overlap_map.png") -> Optional[str]:
+                                   filename: str = None) -> Optional[str]:
         """
         Create a map showing horizontal overlap between non-sequential images
         
@@ -1511,7 +1514,7 @@ class FootprintMap:
             return None
 
     def create_overall_overlap_map(self, footprints: List[Dict], output_path: str, 
-                                filename: str = "overall_overlap_map.png") -> Optional[str]:
+                                filename: str = None) -> Optional[str]:
         """
         Create a map showing overall overlap counts with rainbow color gradient
         
@@ -1676,7 +1679,7 @@ class FootprintMap:
             df = pd.DataFrame(export_data)
             
             # Export to CSV
-            csv_file = os.path.join(output_path, "footprints.csv")
+            csv_file = os.path.join(output_path, "Image_Footprints.csv")
             df.to_csv(csv_file, index=False)
             result_files['csv'] = csv_file
             print(f"Footprint data exported to CSV: {csv_file}")
@@ -1725,614 +1728,119 @@ class FootprintMap:
             print(traceback.format_exc())
             return result_files
 
-    def identify_subsets(self, footprints: List[Dict]) -> List[Dict]:
+    def export_footprint_metrics(self, output_path: str, total_images: int, valid_footprints: int) -> None:
         """
-        Identify meaningful subsets of data for zoomed maps
+        Export footprint analysis metrics to a text file.
         
         Args:
-            footprints: List of dictionaries with footprint data
-            
-        Returns:
-            List of subset definitions
+            output_path: Directory where the metrics file should be saved
+            total_images: Total number of images processed
+            valid_footprints: Number of images with valid footprint calculations
         """
-        if len(footprints) < 10:
-            print("Not enough footprints to identify meaningful subsets")
-            return []
-            
+        metrics_file = os.path.join(output_path, "Image_Footprint_Metrics.txt")
+        
         try:
-            print("Identifying meaningful subsets for zoomed maps...")
-            
-            # Get all coordinates
-            lats = [fp['latitude'] for fp in footprints]
-            lons = [fp['longitude'] for fp in footprints]
-            
-            # Calculate overall bounds
-            min_lat, max_lat = min(lats), max(lats)
-            min_lon, max_lon = min(lons), max(lons)
-            
-            # Calculate range
-            lat_range = max_lat - min_lat
-            lon_range = max_lon - min_lon
-            
-            # Identify clusters using DBSCAN if we have enough points
-            try:
-                from sklearn.cluster import DBSCAN
-                import numpy as np
+            with open(metrics_file, 'w') as f:
+                f.write("=== VOYIS First Look Metrics - Footprint Analysis ===\n")
+                f.write("=" * 55 + "\n\n")
                 
-                # Prepare coordinates for clustering
-                coords = np.array([[lat, lon] for lat, lon in zip(lats, lons)])
+                # Basic statistics
+                f.write("BASIC STATISTICS:\n")
+                f.write("-" * 20 + "\n")
+                f.write(f"Total Images Processed: {total_images}\n")
+                f.write(f"Valid Footprints Generated: {valid_footprints}\n")
+                f.write(f"Success Rate: {(valid_footprints/total_images*100):.1f}%\n\n")
                 
-                # Epsilon is a fraction of the coordinate range
-                eps = min(lat_range, lon_range) * 0.05
-                
-                # Run DBSCAN clustering
-                clustering = DBSCAN(eps=eps, min_samples=5).fit(coords)
-                
-                # Get cluster labels (-1 means noise)
-                labels = clustering.labels_
-                
-                # Count number of clusters
-                n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-                
-                print(f"DBSCAN identified {n_clusters} clusters")
-                
-                # Create subset for each cluster with at least 10 points
-                subsets = []
-                
-                for cluster_id in range(n_clusters):
-                    # Get indices of points in this cluster
-                    indices = [i for i, label in enumerate(labels) if label == cluster_id]
-                    
-                    if len(indices) >= 10:
-                        # Calculate bounds for this cluster
-                        cluster_lats = [lats[i] for i in indices]
-                        cluster_lons = [lons[i] for i in indices]
-                        
-                        # Add padding around cluster
-                        padding = 0.05  # 5% padding
-                        c_min_lat = min(cluster_lats) - lat_range * padding
-                        c_max_lat = max(cluster_lats) + lat_range * padding
-                        c_min_lon = min(cluster_lons) - lon_range * padding
-                        c_max_lon = max(cluster_lons) + lon_range * padding
-                        
-                        # Create subset definition
-                        subset = {
-                            'name': f"Cluster_{cluster_id}",
-                            'indices': indices,
-                            'bounds': [c_min_lon, c_min_lat, c_max_lon, c_max_lat],
-                            'count': len(indices)
-                        }
-                        subsets.append(subset)
-                
-                return subsets
-                
-            except ImportError:
-                print("scikit-learn not available, falling back to grid-based subsets")
-            
-            # If DBSCAN fails or isn't available, fall back to simple grid-based subsetting
-            
-            # Divide into quadrants - four equal parts
-            quadrants = [
-                {
-                    'name': "Northwest",
-                    'bounds': [min_lon, (min_lat + max_lat)/2, (min_lon + max_lon)/2, max_lat]
-                },
-                {
-                    'name': "Northeast",
-                    'bounds': [(min_lon + max_lon)/2, (min_lat + max_lat)/2, max_lon, max_lat]
-                },
-                {
-                    'name': "Southwest",
-                    'bounds': [min_lon, min_lat, (min_lon + max_lon)/2, (min_lat + max_lat)/2]
-                },
-                {
-                    'name': "Southeast",
-                    'bounds': [(min_lon + max_lon)/2, min_lat, max_lon, (min_lat + max_lat)/2]
-                }
-            ]
-            
-            # Filter quadrants to only include those with at least 10 footprints
-            valid_quadrants = []
-            
-            for q in quadrants:
-                # Count footprints in this quadrant
-                bounds = q['bounds']
-                min_lon, min_lat, max_lon, max_lat = bounds
-                
-                # Find footprint indices in this quadrant
-                indices = [
-                    i for i, fp in enumerate(footprints)
-                    if min_lon <= fp['longitude'] <= max_lon and min_lat <= fp['latitude'] <= max_lat
-                ]
-                
-                if len(indices) >= 10:
-                    q['indices'] = indices
-                    q['count'] = len(indices)
-                    valid_quadrants.append(q)
-            print(f"Identified {len(valid_quadrants)} valid quadrant subsets")
-            
-            return valid_quadrants
-            
-        except Exception as e:
-            print(f"Error identifying subsets: {e}")
-            import traceback
-            print(traceback.format_exc())
-            return []
-
-    def create_zoomed_maps(self, footprints: List[Dict], subsets: List[Dict], output_path: str) -> None:
-        """
-        Create zoomed maps for subsets of data
-        
-        Args:
-            footprints: List of dictionaries with footprint data
-            subsets: List of subset definitions
-            output_path: Directory to save the output files
-        """
-        if not subsets:
-            return
-        
-        print(f"Creating {len(subsets)} zoomed maps...")
-        
-        # Create zoomed footprint maps
-        for i, subset in enumerate(subsets):
-            try:
-                subset_name = subset['name']
-                subset_indices = subset['indices']
-                bounds = subset['bounds']
-                
-                print(f"Creating zoomed map for subset: {subset_name} with {len(subset_indices)} footprints")
-                
-                # Create zoomed footprint map
-                self._create_zoomed_footprint_map(footprints, subset, output_path)
-                
-                # Create zoomed overlap maps if data is available
+                # Vertical overlap statistics
                 if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:
-                    self._create_zoomed_vertical_overlap_map(footprints, subset, output_path)
+                    f.write("VERTICAL OVERLAP ANALYSIS:\n")
+                    f.write("-" * 30 + "\n")
+                    stats = self.vertical_overlap_stats
+                    f.write(f"Total Image Pairs Analyzed: {stats.get('total_pairs', 'N/A')}\n")
+                    f.write(f"Pairs with Overlap: {stats.get('overlapping_pairs', 'N/A')}\n")
+                    f.write(f"Overlap Detection Rate: {stats.get('overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Average Overlap Percentage: {stats.get('avg_overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Minimum Overlap: {stats.get('min_overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Maximum Overlap: {stats.get('max_overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Standard Deviation: {stats.get('std_overlap_percentage', 0):.1f}%\n\n")
+                else:
+                    f.write("VERTICAL OVERLAP ANALYSIS: Not calculated\n\n")
+                
+                # Horizontal overlap statistics
+                if hasattr(self, 'horizontal_overlap_stats') and self.horizontal_overlap_stats:
+                    f.write("HORIZONTAL OVERLAP ANALYSIS:\n")
+                    f.write("-" * 32 + "\n")
+                    stats = self.horizontal_overlap_stats
+                    f.write(f"Total Image Groups Analyzed: {stats.get('total_groups', 'N/A')}\n")
+                    f.write(f"Groups with Overlap: {stats.get('overlapping_groups', 'N/A')}\n")
+                    f.write(f"Overlap Detection Rate: {stats.get('overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Average Overlap Percentage: {stats.get('avg_overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Minimum Overlap: {stats.get('min_overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Maximum Overlap: {stats.get('max_overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Standard Deviation: {stats.get('std_overlap_percentage', 0):.1f}%\n\n")
+                else:
+                    f.write("HORIZONTAL OVERLAP ANALYSIS: Not calculated\n\n")
+                
+                # Overall overlap statistics
+                if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats:
+                    f.write("OVERALL OVERLAP ANALYSIS:\n")
+                    f.write("-" * 28 + "\n")
+                    stats = self.overall_overlap_stats
+                    f.write(f"Total Area Covered: {stats.get('total_area_sqm', 0):.2f} m²\n")
+                    f.write(f"Area with Single Coverage: {stats.get('single_coverage_area_sqm', 0):.2f} m²\n")
+                    f.write(f"Area with Multiple Coverage: {stats.get('overlap_area_sqm', 0):.2f} m²\n")
+                    f.write(f"Overall Overlap Percentage: {stats.get('overlap_percentage', 0):.1f}%\n")
+                    f.write(f"Average Coverage Depth: {stats.get('avg_coverage_depth', 0):.2f}x\n")
+                    f.write(f"Maximum Coverage Depth: {stats.get('max_coverage_depth', 0):.0f}x\n\n")
+                else:
+                    f.write("OVERALL OVERLAP ANALYSIS: Not calculated\n\n")
+                
+                # Coverage quality assessment
+                f.write("COVERAGE QUALITY ASSESSMENT:\n")
+                f.write("-" * 32 + "\n")
+                if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:
+                    vert_avg = self.vertical_overlap_stats.get('avg_overlap_percentage', 0)
+                    if vert_avg >= 80:
+                        f.write("Vertical Coverage: EXCELLENT (≥80%)\n")
+                    elif vert_avg >= 60:
+                        f.write("Vertical Coverage: GOOD (60-79%)\n")
+                    elif vert_avg >= 40:
+                        f.write("Vertical Coverage: FAIR (40-59%)\n")
+                    else:
+                        f.write("Vertical Coverage: POOR (<40%)\n")
+                else:
+                    f.write("Vertical Coverage: NOT ASSESSED\n")
                 
                 if hasattr(self, 'horizontal_overlap_stats') and self.horizontal_overlap_stats:
-                    self._create_zoomed_horizontal_overlap_map(footprints, subset, output_path)
-                    
+                    horiz_avg = self.horizontal_overlap_stats.get('avg_overlap_percentage', 0)
+                    if horiz_avg >= 60:
+                        f.write("Horizontal Coverage: EXCELLENT (≥60%)\n")
+                    elif horiz_avg >= 40:
+                        f.write("Horizontal Coverage: GOOD (40-59%)\n")
+                    elif horiz_avg >= 20:
+                        f.write("Horizontal Coverage: FAIR (20-39%)\n")
+                    else:
+                        f.write("Horizontal Coverage: POOR (<20%)\n")
+                else:
+                    f.write("Horizontal Coverage: NOT ASSESSED\n")
+                
                 if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats:
-                    self._create_zoomed_overall_overlap_map(footprints, subset, output_path)
-                    
-            except Exception as e:
-                print(f"Error creating zoomed map for subset {i}: {e}")
-                import traceback
-                print(traceback.format_exc())
-
-    def _create_zoomed_footprint_map(self, footprints: List[Dict], subset: Dict, output_path: str) -> Optional[str]:
-        """Create zoomed footprint map for a data subset"""
-        try:
-            # Use non-interactive backend to avoid threading issues
-            import matplotlib
-            matplotlib.use('Agg')
-            
-            # Create figure
-            fig, ax = plt.subplots(figsize=(12, 10))
-            
-            # Get subset info
-            subset_name = subset['name']
-            subset_indices = subset['indices']
-            bounds = subset['bounds']
-            
-            # Plot each footprint in the subset
-            for idx in subset_indices:
-                fp = footprints[idx]
-                
-                # Plot polygon with low alpha for overlap visibility
-                polygon = np.array(fp['vertices'])
-                ax.fill(polygon[:, 0], polygon[:, 1], alpha=0.3, edgecolor='blue', facecolor='skyblue')
-                
-                # Plot center point
-                ax.plot(fp['longitude'], fp['latitude'], 'r.', markersize=2)
-            
-            # Set the plot bounds
-            ax.set_xlim(bounds[0], bounds[2])
-            ax.set_ylim(bounds[1], bounds[3])
-            
-            # Set labels and title
-            ax.set_xlabel('Longitude (Decimal Degrees)')
-            ax.set_ylabel('Latitude (Decimal Degrees)')
-            ax.set_title(f'Image Footprints - {subset_name}')
-            
-            # Add grid
-            ax.grid(True, linestyle='--', alpha=0.5)
-            
-            # Round to 2 decimal places
-            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            
-            # Increase font sizes
-            for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                        ax.get_xticklabels() + ax.get_yticklabels()):
-                item.set_fontsize(item.get_fontsize() + 2)
-            
-            # Rotate x-axis labels for better readability
-            plt.xticks(rotation=45, ha='right')
-            
-            # Adjust layout
-            plt.tight_layout()
-            
-            # Save plot
-            output_file = os.path.join(output_path, f"footprints_zoom_{subset_name}.png")
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-            
-            print(f"Zoomed footprint map saved to: {output_file}")
-            return output_file
-            
-        except Exception as e:
-            print(f"Error creating zoomed footprint map: {e}")
-            import traceback
-            print(traceback.format_exc())
-            return None
-
-    def _create_zoomed_vertical_overlap_map(self, footprints: List[Dict], subset: Dict, output_path: str) -> Optional[str]:
-        """Create zoomed vertical overlap map for a data subset"""
-        try:
-            # Use non-interactive backend
-            import matplotlib
-            matplotlib.use('Agg')
-            
-            # Create figure
-            fig, ax = plt.subplots(figsize=(12, 10))
-            
-            # Get subset info
-            subset_name = subset['name']
-            subset_indices = set(subset['indices'])  # Convert to set for faster lookups
-            bounds = subset['bounds']
-            
-            # Setup colors
-            low_color = '#FF4040'      # Red
-            medium_color = '#FFFF40'   # Yellow
-            high_color = '#40FF40'     # Green
-            
-            # Plot footprints in subset with very low alpha for context
-            for idx in subset_indices:
-                fp = footprints[idx]
-                polygon = np.array(fp['vertices'])
-                ax.fill(polygon[:, 0], polygon[:, 1], alpha=0.05, edgecolor='gray', facecolor='whitesmoke')
-            
-            # Plot relevant overlaps (where both images are in the subset)
-            overlap_in_subset = []
-            
-            for overlap in self.vertical_overlap_stats['overlap_data']:
-                # Find the indices of both footprints
-                current_idx = footprints.index(overlap['current_fp'])
-                next_idx = footprints.index(overlap['next_fp'])
-                
-                # Only include if both are in the subset
-                if current_idx in subset_indices and next_idx in subset_indices:
-                    overlap_in_subset.append(overlap)
-                    
-                    intersection = overlap['intersection']
-                    category = overlap['category']
-                    
-                    # Set color based on overlap category
-                    if category == 'low':
-                        color = low_color
-                    elif category == 'medium':
-                        color = medium_color
+                    overall_pct = self.overall_overlap_stats.get('overlap_percentage', 0)
+                    if overall_pct >= 70:
+                        f.write("Overall Coverage: EXCELLENT (≥70%)\n")
+                    elif overall_pct >= 50:
+                        f.write("Overall Coverage: GOOD (50-69%)\n")
+                    elif overall_pct >= 30:
+                        f.write("Overall Coverage: FAIR (30-49%)\n")
                     else:
-                        color = high_color
-                    
-                    # Plot intersection
-                    if intersection.geom_type == 'Polygon':
-                        x, y = intersection.exterior.xy
-                        ax.fill(x, y, alpha=0.7, edgecolor='none', facecolor=color)
-                        
-                        # Add percentage label for larger polygons
-                        if intersection.area > 0.0001:
-                            centroid = intersection.centroid
-                            ax.text(centroid.x, centroid.y, f"{overlap['overlap_percent']:.0f}%", 
-                                fontsize=10,
-                                ha='center', va='center', color='black',
-                                bbox=dict(facecolor='white', alpha=0.7, pad=1, boxstyle='round,pad=0.2'))
-                        
-                    elif intersection.geom_type == 'MultiPolygon':
-                        for poly in intersection.geoms:
-                            x, y = poly.exterior.xy
-                            ax.fill(x, y, alpha=0.7, edgecolor='none', facecolor=color)
-            
-            # Set the plot bounds
-            ax.set_xlim(bounds[0], bounds[2])
-            ax.set_ylim(bounds[1], bounds[3])
-            
-            # Set labels and title
-            ax.set_xlabel('Longitude (Decimal Degrees)')
-            ax.set_ylabel('Latitude (Decimal Degrees)')
-            ax.set_title(f'Vertical Overlap - {subset_name}')
-            
-            # Add grid
-            ax.grid(True, linestyle='--', alpha=0.3)
-            
-            # Create legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor=low_color, edgecolor='none', alpha=0.7, label='Low (<40%)'),
-                Patch(facecolor=medium_color, edgecolor='none', alpha=0.7, label='Medium (40-70%)'),
-                Patch(facecolor=high_color, edgecolor='none', alpha=0.7, label='High (>70%)')
-            ]
-            ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
-            
-            # Configure axis formatting
-            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            plt.xticks(rotation=45, ha='right')
-            
-            # Increase font sizes
-            for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                        ax.get_xticklabels() + ax.get_yticklabels()):
-                item.set_fontsize(item.get_fontsize() + 2)
-            
-            plt.tight_layout()
-            
-            # Save plot
-            output_file = os.path.join(output_path, f"vertical_overlap_zoom_{subset_name}.png")
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-            
-            print(f"Zoomed vertical overlap map saved to: {output_file}")
-            return output_file
+                        f.write("Overall Coverage: POOR (<30%)\n")
+                else:
+                    f.write("Overall Coverage: NOT ASSESSED\n")
+                
+                f.write("\n" + "=" * 55 + "\n")
+                f.write("Generated by VOYIS First Look Metrics\n")
+                
+            print(f"Footprint metrics exported to: {metrics_file}")
             
         except Exception as e:
-            print(f"Error creating zoomed vertical overlap map: {e}")
-            import traceback
-            print(traceback.format_exc())
-            return None
-
-    def _create_zoomed_horizontal_overlap_map(self, footprints: List[Dict], subset: Dict, output_path: str) -> Optional[str]:
-        """Create zoomed horizontal overlap map for a data subset"""
-        # Implementation very similar to _create_zoomed_vertical_overlap_map
-        # but using horizontal_overlap_stats and appropriate colors/labels
-        try:
-            # Use non-interactive backend
-            import matplotlib
-            matplotlib.use('Agg')
-            
-            # Create figure
-            fig, ax = plt.subplots(figsize=(12, 10))
-            
-            # Get subset info
-            subset_name = subset['name']
-            subset_indices = set(subset['indices'])
-            bounds = subset['bounds']
-            
-            # Setup colors
-            low_color = '#FF4040'      # Red
-            medium_color = '#FFA500'   # Orange
-            high_color = '#40FF40'     # Green
-            
-            # Plot footprints in subset with very low alpha for context
-            for idx in subset_indices:
-                fp = footprints[idx]
-                polygon = np.array(fp['vertices'])
-                ax.fill(polygon[:, 0], polygon[:, 1], alpha=0.05, edgecolor='gray', facecolor='whitesmoke')
-            
-            # Plot relevant overlaps (where both images are in the subset)
-            overlap_in_subset = []
-            
-            for overlap in self.horizontal_overlap_stats['overlap_data']:
-                # Find the indices of both footprints
-                current_idx = footprints.index(overlap['current_fp'])
-                next_idx = footprints.index(overlap['next_fp'])
-                
-                # Only include if both are in the subset
-                if current_idx in subset_indices and next_idx in subset_indices:
-                    overlap_in_subset.append(overlap)
-                    
-                    intersection = overlap['intersection']
-                    category = overlap['category']
-                    
-                    # Set color based on overlap category
-                    if category == 'low':
-                        color = low_color
-                    elif category == 'medium':
-                        color = medium_color
-                    else:
-                        color = high_color
-                    
-                    # Plot intersection
-                    if intersection.geom_type == 'Polygon':
-                        x, y = intersection.exterior.xy
-                        ax.fill(x, y, alpha=0.7, edgecolor='none', facecolor=color)
-                        
-                        # Add percentage label for larger polygons
-                        if intersection.area > 0.0001:
-                            centroid = intersection.centroid
-                            ax.text(centroid.x, centroid.y, f"{overlap['overlap_percent']:.0f}%", 
-                                fontsize=10,
-                                ha='center', va='center', color='black',
-                                bbox=dict(facecolor='white', alpha=0.7, pad=1, boxstyle='round,pad=0.2'))
-                        
-                    elif intersection.geom_type == 'MultiPolygon':
-                        for poly in intersection.geoms:
-                            x, y = poly.exterior.xy
-                            ax.fill(x, y, alpha=0.7, edgecolor='none', facecolor=color)
-            
-            # Set the plot bounds
-            ax.set_xlim(bounds[0], bounds[2])
-            ax.set_ylim(bounds[1], bounds[3])
-            
-            # Set labels and title
-            ax.set_xlabel('Longitude (Decimal Degrees)')
-            ax.set_ylabel('Latitude (Decimal Degrees)')
-            ax.set_title(f'Horizontal Overlap - {subset_name}')
-            
-            # Add grid
-            ax.grid(True, linestyle='--', alpha=0.3)
-            
-            # Create legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor=low_color, edgecolor='none', alpha=0.7, label='Low (<10%)'),
-                Patch(facecolor=medium_color, edgecolor='none', alpha=0.7, label='Medium (10-40%)'),
-                Patch(facecolor=high_color, edgecolor='none', alpha=0.7, label='High (>40%)')
-            ]
-            ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
-            
-            # Configure axis formatting
-            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            plt.xticks(rotation=45, ha='right')
-            
-            # Increase font sizes
-            for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                        ax.get_xticklabels() + ax.get_yticklabels()):
-                item.set_fontsize(item.get_fontsize() + 2)
-            
-            plt.tight_layout()
-            
-            # Save plot
-            output_file = os.path.join(output_path, f"horizontal_overlap_zoom_{subset_name}.png")
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-            
-            print(f"Zoomed horizontal overlap map saved to: {output_file}")
-            return output_file
-            
-        except Exception as e:
-            print(f"Error creating zoomed horizontal overlap map: {e}")
-            import traceback
-            print(traceback.format_exc())
-            return None
-
-    def _create_zoomed_overall_overlap_map(self, footprints: List[Dict], subset: Dict, output_path: str) -> Optional[str]:
-        """Create zoomed overall overlap map for a data subset"""
-        try:
-            # Use non-interactive backend
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.colors as mcolors
-            
-            # Create figure
-            fig, ax = plt.subplots(figsize=(12, 10))
-            
-            # Get subset info
-            subset_name = subset['name']
-            subset_indices = set(subset['indices'])
-            bounds = subset['bounds']
-            
-            # Create a rainbow colormap from blue/purple (high) to red (low)
-            cmap = plt.cm.rainbow_r
-            
-            # Filter polygons to just those in the subset
-            subset_polygons = [p for p in self.overall_overlap_stats['polygons'] if p['index'] in subset_indices]
-            
-            # Get min and max overlap count in the subset
-            overlap_counts = [p['overlap_count'] for p in subset_polygons]
-            min_count = min(overlap_counts) if overlap_counts else 0
-            max_count = max(overlap_counts) if overlap_counts else 0
-            
-            # Create a normalization that handles the case where min=max
-            if min_count == max_count:
-                norm = mcolors.Normalize(vmin=min_count-0.5, vmax=max_count+0.5)
-            else:
-                norm = mcolors.Normalize(vmin=min_count, vmax=max_count)
-            
-            # Plot each footprint with color based on overlap count
-            for poly_data in subset_polygons:
-                count = poly_data['overlap_count']
-                polygon = poly_data['polygon']
-                
-                # Get color from colormap
-                color = cmap(norm(count))
-                
-                # Plot polygon
-                x, y = polygon.exterior.xy
-                ax.fill(x, y, alpha=0.7, edgecolor='none', linewidth=0, facecolor=color)
-                
-                # Add count label for larger polygons
-                if polygon.area > 0.0001:
-                    centroid = polygon.centroid
-                    ax.text(centroid.x, centroid.y, str(count), 
-                        fontsize=10,
-                        ha='center', va='center', color='white',
-                        bbox=dict(facecolor='black', alpha=0.5, pad=1, boxstyle='round,pad=0.2'))
-            
-            # Set the plot bounds
-            ax.set_xlim(bounds[0], bounds[2])
-            ax.set_ylim(bounds[1], bounds[3])
-            
-            # Set labels and title
-            ax.set_xlabel('Longitude (Decimal Degrees)')
-            ax.set_ylabel('Latitude (Decimal Degrees)')
-            ax.set_title(f'Overall Image Overlap - {subset_name}')
-            
-            # Add grid
-            ax.grid(True, linestyle='--', alpha=0.3)
-            
-            # Add a colorbar
-            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-            sm.set_array([])  # ScalarMappable needs an array for the colorbar
-            cbar = plt.colorbar(sm, ax=ax)
-            cbar.set_label('Number of Overlapping Images')
-            cbar.ax.tick_params(labelsize=10)  # Increase tick label size
-            
-            # Configure axis formatting
-            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x:.2f}"))
-            plt.xticks(rotation=45, ha='right')
-            
-            # Increase font sizes
-            for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                        ax.get_xticklabels() + ax.get_yticklabels()):
-                item.set_fontsize(item.get_fontsize() + 2)
-            
-            plt.tight_layout()
-            
-            # Save plot
-            output_file = os.path.join(output_path, f"overall_overlap_zoom_{subset_name}.png")
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-            
-            print(f"Zoomed overall overlap map saved to: {output_file}")
-            return output_file
-            
-        except Exception as e:
-            print(f"Error creating zoomed overall overlap map: {e}")
-            import traceback
-            print(traceback.format_exc())
-            return None
-
-    def _detect_outliers(self, points: List[Dict], std_threshold: float = 3.0) -> List[bool]:
-        """
-        Detect outliers in GPS coordinates using the z-score method
-        
-        Args:
-            points: List of dictionaries containing GPS data
-            std_threshold: Number of standard deviations to use as threshold (default: 3.0)
-            
-        Returns:
-            List of boolean values indicating if each point is an outlier
-        """
-        try:
-            # Extract coordinates
-            lats = np.array([p['latitude'] for p in points])
-            lons = np.array([p['longitude'] for p in points])
-            
-            # Calculate z-scores for both latitude and longitude
-            lat_mean = np.mean(lats)
-            lon_mean = np.mean(lons)
-            lat_std = np.std(lats)
-            lon_std = np.std(lons)
-            
-            lat_z_scores = np.abs((lats - lat_mean) / lat_std)
-            lon_z_scores = np.abs((lons - lon_mean) / lon_std)
-            
-            # Mark points as outliers if either latitude or longitude exceeds threshold
-            outliers = (lat_z_scores > std_threshold) | (lon_z_scores > std_threshold)
-            
-            # Log outliers found
-            if any(outliers):
-                print("\nOutliers detected:")
-                for i, (is_outlier, point) in enumerate(zip(outliers, points)):
-                    if is_outlier:
-                        print(f"Point {i}: lat={point['latitude']}, lon={point['longitude']}")
-                        print(f"Z-scores: lat={lat_z_scores[i]:.2f}, lon={lon_z_scores[i]:.2f}")
-            
-            return outliers.tolist()
-            
-        except Exception as e:
-            print(f"Error detecting outliers: {e}")
-            return [False] * len(points)
+            print(f"Error exporting footprint metrics: {str(e)}")

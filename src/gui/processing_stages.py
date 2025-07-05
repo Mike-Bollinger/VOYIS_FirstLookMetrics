@@ -113,7 +113,7 @@ class ProcessingStages:
     def create_simple_csv_export(self, output_folder):
         """Create simple CSV export as fallback"""
         try:
-            csv_path = os.path.join(output_folder, "image_locations.csv")
+            csv_path = os.path.join(output_folder, "Image_Locations.csv")
             import pandas as pd
             df = pd.DataFrame(self.metrics.gps_data)
             
@@ -163,12 +163,18 @@ class ProcessingStages:
                 self.metrics.gps_data,
                 output_folder,
                 nav_file_path=nav_path,
-                filename="image_footprints_map.png"
+                filename="Image_Footprints_Map.png"
             )
             
             if footprint_map_path:
                 self.log_message(f"Image footprint map created: {footprint_map_path}")
                 self.copy_overlap_stats()
+                
+                # Export footprint metrics to separate text file
+                total_images = len(self.metrics.gps_data) if self.metrics.gps_data else 0
+                valid_footprints = len([fp for fp in self.metrics.gps_data if fp.get('altitude', float('inf')) <= self.altitude_threshold]) if self.metrics.gps_data else 0
+                self.footprint_map.export_footprint_metrics(output_folder, total_images, valid_footprints)
+                
                 self.append_overlap_metrics_to_file(output_folder)
             else:
                 self.log_message("Failed to create footprint map")
@@ -266,8 +272,8 @@ class ProcessingStages:
         if success:
             self.log_message(f"Visibility analysis complete. Results saved to {output_folder}")
             
-            for line in self.visibility_analyzer.get_summary_report():
-                self.log_message(line)
+            # Export visibility metrics to separate text file
+            self.visibility_analyzer.export_visibility_metrics(output_folder, stats)
             
             self.append_visibility_metrics_to_file(output_folder)
         else:

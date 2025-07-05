@@ -6,7 +6,7 @@
 
 **Version:** 1.5.0  
 **Last Updated:** June 2025  
-**Author:** Mike Bollinger (Imagery), Jeff Coogan (LLS)
+**Author:** Mike Bollinger (Imagery, GUI), Jeff Coogan (LLS)
 
 ## Overview
 The VOYIS First Look Metrics application is designed to calculate summary statistics about a folder of images collected by an AUV. It analyzes processed stills and raw images, providing comprehensive metrics about image coverage, overlap, and quality. The application features a user-friendly graphical interface for selecting input and output folders and displays real-time processing status.

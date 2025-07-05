@@ -82,7 +82,7 @@ class UIComponents:
         # Help text for batch CSV format
         help_text = ttk.Label(
             self.batch_csv_frame, 
-            text="CSV must contain columns: input_folder, output_folder, nav_file (optional), lls_folder (optional), phins_nav_file (optional)",
+            text="CSV must contain columns: input_folder, output_folder, nav_file (optional), nav_plot_file (optional), lls_folder (optional), phins_nav_file (optional)",
             font=('TkDefaultFont', 8),
             foreground='gray'
         )
@@ -128,7 +128,7 @@ class UIComponents:
         self.lls_button.grid(row=0, column=2)
         
         # Phins Nav file selection
-        ttk.Label(lls_frame, text="Phins Nav File:").grid(row=1, column=0, sticky='w')
+        ttk.Label(lls_frame, text="PhinsData Bin File:").grid(row=1, column=0, sticky='w')
         self.phins_nav_entry = ttk.Entry(lls_frame, textvariable=self.phins_nav_path, width=40)
         self.phins_nav_entry.grid(row=1, column=1, padx=5, sticky='ew')
         self.phins_nav_button = ttk.Button(lls_frame, text="Browse...", command=self.select_phins_nav_file)
@@ -180,13 +180,36 @@ class UIComponents:
         self.functions_frame.columnconfigure(0, weight=1)
         
         # Create subsections
+        self._create_navigation_processing_section()
         self._create_lls_processing_section()
         self._create_imagery_processing_section()
+
+    def _create_navigation_processing_section(self):
+        """Create navigation processing section"""
+        nav_section = ttk.LabelFrame(self.functions_frame, text="Navigation Data Processing", padding="5")
+        nav_section.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        nav_section.columnconfigure(1, weight=1)
+        
+        # Navigation processing checkbox
+        self.nav_processing_checkbox = ttk.Checkbutton(
+            nav_section, 
+            text="Process Navigation Data", 
+            variable=self.nav_processing_var,
+            command=self.update_all_checkbox
+        )
+        self.nav_processing_checkbox.grid(row=0, column=0, sticky='w', columnspan=3)
+        
+        # Navigation file selection
+        ttk.Label(nav_section, text="Navigation File:").grid(row=1, column=0, sticky='w', padx=(20, 5))
+        self.nav_file_entry = ttk.Entry(nav_section, textvariable=self.nav_file_path, width=35)
+        self.nav_file_entry.grid(row=1, column=1, padx=5, sticky='ew')
+        self.nav_file_button = ttk.Button(nav_section, text="Browse...", command=self.select_nav_file_for_plotting)
+        self.nav_file_button.grid(row=1, column=2)
 
     def _create_lls_processing_section(self):
         """Create LLS processing section"""
         lls_section = ttk.LabelFrame(self.functions_frame, text="Laser Data Processing", padding="5")
-        lls_section.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        lls_section.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         
         self.lls_processing_checkbox = ttk.Checkbutton(
             lls_section, 
@@ -199,7 +222,7 @@ class UIComponents:
     def _create_imagery_processing_section(self):
         """Create imagery processing section"""
         imagery_section = ttk.LabelFrame(self.functions_frame, text="Imagery Processing", padding="5")
-        imagery_section.grid(row=1, column=0, columnspan=3, sticky='ew')
+        imagery_section.grid(row=2, column=0, columnspan=3, sticky='ew')
         
         # "All" checkbox
         self.all_checkbox = ttk.Checkbutton(

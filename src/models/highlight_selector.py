@@ -128,9 +128,9 @@ class HighlightSelector:
                 try:
                     # Look in multiple potential locations
                     vis_csv_paths = [
-                        os.path.join(output_folder, "visibility_results.csv"),
-                        os.path.join(os.path.dirname(output_folder), "visibility_results.csv"),
-                        os.path.join(input_folder, "visibility_results.csv"),
+                        os.path.join(output_folder, "Image_Visibility_Results.csv"),
+                        os.path.join(os.path.dirname(output_folder), "Image_Visibility_Results.csv"),
+                        os.path.join(input_folder, "Image_Visibility_Results.csv"),
                         os.path.join(os.path.dirname(input_folder), "visibility_results.csv")
                     ]
                     

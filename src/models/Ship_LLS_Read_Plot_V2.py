@@ -346,6 +346,12 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
         if log_callback:
             log_callback(message)
     
+    # Set matplotlib to use white background
+    plt.style.use('default')
+    plt.rcParams['figure.facecolor'] = 'white'
+    plt.rcParams['axes.facecolor'] = 'white'
+    plt.rcParams['savefig.facecolor'] = 'white'
+    
     log_message("Generating dive profile plot...")
     
     dfLS['Distance_Traveled'] = np.sqrt(
@@ -359,39 +365,36 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     df1 = df1.copy()  
     df0 = dfLS[dfLS['DepthFlag'] == 0]
 
-    plt.figure(figsize=(8.5, 5.5))
+    plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['Date_Time'], df_Full_Dive['AUV_Depth'], '--', label='Depth of AUV', markersize=0.5, color='gray')
     plt.plot(df_Full_Dive['Date_Time'], df_Full_Dive['AUV_Depth']-df_Full_Dive['AUV_Altitude'], 'k', label='Seafloor')
     plt.plot(df0['Date_Time'], df0['AUV_Depth'], '.', label='Bad Data Point', markersize=1.5, color='orange')
     plt.plot(df1['Date_Time'], df1['AUV_Depth'], '.g', label='Sensor Reached Seafloor', markersize=1.5)
     plt.legend()
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-    plt.xlabel(f'Time on {dfLS["Date_Time"].iloc[0].strftime("%m/%d/%y")}')  # Use the first timestamp for the date
+    plt.xlabel(f'Time on {dfLS["Date_Time"].iloc[0].strftime("%m/%d/%y")}')
     plt.ylabel('Depth (m)')
     plt.grid()
-    # plt.title('AUV Depth Profile with Good and Bad Data Points')
-    print(plot_dir)
-    print(DIVE_NAME)
-    plt.savefig(os.path.join(plot_dir, f'{DIVE_NAME}_AUV_Dive_Profile.png'))
+    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Dive_Profile.png"), facecolor='white', bbox_inches='tight')
     plt.close()
     log_message("Generated dive profile plot")
 
     log_message("Generating depth histogram...")
     # Histogram of depth values
-    plt.figure(figsize=(8.5, 5.5))
+    plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.hist(df1['Depth'], bins=150, alpha=0.7, color='blue', density=True)
     plt.xlabel('Depth (m)')
     plt.ylabel('Probability Density')
     # plt.title('Histogram of Good Btm Depth Values')
     # plt.xlim(0, -150)
     plt.grid()
-    plt.savefig(os.path.join(plot_dir, f'{DIVE_NAME}_AUV_Depth_Histogram.png'))
+    plt.savefig(os.path.join(plot_dir, "LLS_Auv_Depth_Histogram.png"), facecolor='white', bbox_inches='tight')
     plt.close()
     log_message("Generated depth histogram")
 
     log_message("Generating intensity analysis plots...")
     # plot histogram and depth to intensity scatter plot
-    fig, axs = plt.subplots(1, 2, figsize=(8.5, 5.5))
+    fig, axs = plt.subplots(1, 2, figsize=(8.5, 5.5), facecolor='white')
     axs[0].hist(df1['AverageIntensityAll'], bins=150, range=(0,1500), alpha=0.7, label='Intensity All', color='blue', density=True)
     axs[0].hist(df1['AverageIntensityBtm'], bins=150, range=(0,1500), alpha=0.7, label='Intensity Btm', color='red', density=True)
     axs[0].axvline(x=MIN_INTENSITY_THRESHOLD, color='black', linestyle='--', label='Intensity Threshold')
@@ -415,13 +418,13 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     axs[1].set_ylim(0, 1600)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(plot_dir, f'{DIVE_NAME}_AUV_Depth_vs_Intensity.png'))
+    plt.savefig(os.path.join(plot_dir, f"LLS_AUV_Depth_Vs_Intensity.png"), facecolor='white', bbox_inches='tight')
     plt.close()
     log_message("Generated intensity analysis plots")
 
     log_message("Generating position maps...")
     # Position plot
-    plt.figure(figsize=(8.5, 5.5))
+    plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.scatter(df0['AUV_Easting'], df0['AUV_Northing'], alpha=0.5, label='Bad Data Point', color='orange', s=1.5)
     plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], alpha=0.5, label='AUV Position', color='green', s=1.5)
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path')
@@ -430,11 +433,11 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     # plt.title('AUV Position')
     plt.legend()
     plt.grid()
-    plt.savefig(os.path.join(plot_dir, f'{DIVE_NAME}_AUV_Position.png'))
+    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position.png"), facecolor='white', bbox_inches='tight')
     plt.close()
 
     # Scatter plot of AUV position with depth color coding
-    plt.figure(figsize=(8.5, 5.5))
+    plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
     scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['Depth'], cmap='viridis', zorder=2)
     plt.colorbar(scatter, label='Depth (m)')
@@ -442,7 +445,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     plt.ylabel('Northing (m)')
     # plt.title('AUV Position with Depth Color Coding')
     plt.grid()
-    plt.savefig(os.path.join(plot_dir, f'{DIVE_NAME}_AUV_Position_Depth_Color.png'))
+    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Color.png"), facecolor='white', bbox_inches='tight')
     plt.close()
 
     log_message("Generating depth deviation analysis...")
@@ -459,7 +462,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     dfnan.sort_values(by='Deviation_Depth', inplace=True)
     dfnan.reset_index(drop=True, inplace=True)
 
-    plt.figure(figsize=(8.5, 5.5))
+    plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
     scatter = plt.scatter(dfnan['AUV_Easting'], dfnan['AUV_Northing'], c=dfnan['Deviation_Depth'], cmap='coolwarm',
                           vmin=-3, vmax=3, zorder=2)
@@ -468,14 +471,13 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     plt.ylabel('Northing (m)')
     # plt.title('AUV Position with Depth Color Coding')
     plt.grid()
-    plt.savefig(os.path.join(plot_dir, f'{DIVE_NAME}_AUV_Position_Depth_Deviation_Color.png'))
+    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Deviation_Color.png"), facecolor='white', bbox_inches='tight')
     plt.close()
-
 
     # Scatter plot of AUV position with intensity color coding
     df1.sort_values(by='AverageIntensityBtm', inplace=True)
     df1.reset_index(drop=True, inplace=True)   
-    plt.figure(figsize=(8.5, 5.5))
+    plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
     scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['AverageIntensityBtm'], cmap='viridis', 
                           vmin=50, vmax=1500, zorder=2)
@@ -484,18 +486,20 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     plt.ylabel('Northing (m)')
     # plt.title('AUV Position with Intensity Color Coding')
     plt.grid()
-    plt.savefig(os.path.join(plot_dir, f'{DIVE_NAME}_AUV_Position_Intensity_Color.png'))
+    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Intensity_Color.png"), facecolor='white', bbox_inches='tight')
     plt.close()
     
     log_message("All summary plots generated successfully")
 
-def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD, RADIUS, xyz_files=None, log_callback=None):
+def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD, RADIUS, 
+                         gui_output_dir=None, xyz_files=None, log_callback=None):
     """
     Main function to process LLS data and generate summary plots.
     :param BaseDir: Base directory containing the data.
     :param MIN_INTENSITY_THRESHOLD: anything above this is considered a good point, used to keep points in the radius, and build percent of LLS points considered to be good (default is 100)
     :param BAD_POINT_THRESHOLD: percent of points that need to be above MIN_INTENSITY_THRESHOLD to use basic bottom find, if BAD_POINT_THRESHOLD % of the points are less then MIN_INTENSITY_THRESHOLD, use an alternate approach to look for the bottom (default is 70)
     :param RADIUS:  draws a circle around the AUV and rejects low intensity points in the radius, there can be a lot of noise and bad points near the sensor beam edges, (default is 4m) 
+    :param gui_output_dir: Output directory defined in GUI (if None, uses default BaseDir structure)
     :param xyz_files: dont need to include, if empty it runs all LLS*.xyz files in the LLS dir, or you can specify certain XYZ files
     :param log_callback: Optional callback function for logging messages to GUI
     """
@@ -508,11 +512,21 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     
     DiveNumber=BaseDir.split('\\')[-1]
     LLSDir=os.path.join(BaseDir, 'LLS')
-    LLSOutputDir=os.path.join(BaseDir, 'LLS_Output')
     VehicleDir=os.path.join(BaseDir, 'Vehicle_Data')
-    VehicleOutputDir=os.path.join(BaseDir, 'Vehicle_Output')
     ImageDir=os.path.join(BaseDir, 'Images')
-    ImageOutputDir=os.path.join(BaseDir, 'Images_Output')
+    
+    # Use GUI output directory if provided, otherwise use default structure
+    if gui_output_dir:
+        LLSOutputDir = gui_output_dir
+        VehicleOutputDir = gui_output_dir
+        ImageOutputDir = gui_output_dir
+        # Use single output directory for all outputs
+        output_dir = gui_output_dir
+    else:
+        LLSOutputDir=os.path.join(BaseDir, 'LLS_Output')
+        VehicleOutputDir=os.path.join(BaseDir, 'Vehicle_Output')
+        ImageOutputDir=os.path.join(BaseDir, 'Images_Output')
+        output_dir = None
 
     if not os.path.exists(VehicleOutputDir):
         os.makedirs(VehicleOutputDir)
@@ -560,8 +574,8 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     dfLS['Date_Time'] = pd.to_datetime(dfLS['Date_Time'])
     dfLS.sort_values(by='Date_Time', inplace=True)
     dfLS.reset_index(drop=True, inplace=True)
-    # Save the DataFrame to a CSV file
-    output_file = os.path.join(LLSOutputDir, 'Processed_LLS.csv')
+    # Save the DataFrame to a CSV file - use gui_output_dir if available
+    output_file = os.path.join(output_dir if output_dir else LLSOutputDir, "LLS_Processed_Lls.csv")
     dfLS.to_csv(output_file, index=False)
     log_message(f"Saved processed LLS data to {output_file}")
 
@@ -607,8 +621,8 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
                 'AverageIntensityBtm': file_data['AverageIntensityBtm'].mean()}
         dfLS_Files_rows.append(row_dict)
     dfLS_Files = pd.DataFrame(dfLS_Files_rows)
-    # Save the DataFrame to a CSV file
-    output_file = os.path.join(LLSOutputDir, 'Processed_LLS_Files.csv')
+    # Save the DataFrame to a CSV file - use gui_output_dir if available
+    output_file = os.path.join(output_dir if output_dir else LLSOutputDir, "LLS_Processed_Lls_Files.csv")
     dfLS_Files.to_csv(output_file, index=False)
     log_message(f"Saved processed file summaries to {output_file}")
     
@@ -618,7 +632,9 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     log_message(f"Processing rate: {proces_rate:.2f} MB/s")
 
     log_message("Processing navigation surface offset...")
-    StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = phins.NAV_surface_offset(VehicleDir, VehicleOutputDir, pd.to_datetime(time_start_list, utc=True).mean())
+    # Use output_dir for vehicle processing if available
+    vehicle_plot_dir = output_dir if output_dir else VehicleOutputDir
+    StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = phins.NAV_surface_offset(VehicleDir, vehicle_plot_dir, pd.to_datetime(time_start_list, utc=True).mean())
        
     df_Full_Dive = pd.DataFrame()
     df_Full_Dive['Date_Time'] = pd.date_range(start=StartDive, end=EndDive, freq='1s')
@@ -626,10 +642,12 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     df_Full_Dive = phins.add_IMU_NAV(df_Full_Dive, VehicleDir)
 
     log_message("Creating summary plots...")
-    Summary_plots(dfLS, LLSOutputDir, DiveNumber, df_Full_Dive, MIN_INTENSITY_THRESHOLD, log_callback)
+    # Use output_dir for LLS plots if available
+    lls_plot_dir = output_dir if output_dir else LLSOutputDir
+    Summary_plots(dfLS, lls_plot_dir, DiveNumber, df_Full_Dive, MIN_INTENSITY_THRESHOLD, log_callback)
     
     # create text file with summary of run time, processing rate, file size, number of files, TotalPoints, perecent DEPTH_FLAG=1 and avg point density
-    summary_file = os.path.join(LLSOutputDir, f"Voyis_QuickLook_Summary.txt")
+    summary_file = os.path.join(output_dir if output_dir else LLSOutputDir, f"LLS_Voyis_QuickLook_Summary.txt")  # Added LLS_ prefix
     with open(summary_file, 'w') as f:
         f.write(f"Total Run Time: {Total_Run_Time}\n")
         f.write(f"Processing rate: {proces_rate:.2f} MB/s\n")

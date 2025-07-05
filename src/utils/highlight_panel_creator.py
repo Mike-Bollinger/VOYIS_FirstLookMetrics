@@ -517,12 +517,12 @@ class HighlightPanelCreator:
         
         try:
             # Create output filename
-            output_filename = os.path.join(self.output_folder, "highlight_panel.png")
+            output_filename = os.path.join(self.output_folder, "Image_Highlight_Panel.png")
             
             # Let the user choose the filename
             save_path = filedialog.asksaveasfilename(
                 initialdir=self.output_folder,
-                initialfile="highlight_panel.png",
+                initialfile="Image_Highlight_Panel.png",
                 defaultextension=".png",
                 filetypes=[
                     ("PNG files", "*.png"),

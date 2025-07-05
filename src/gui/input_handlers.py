@@ -48,6 +48,16 @@ class InputHandlers:
             self.nav_path.set(file_path)
             self.log_message(f"Vehicle navigation file set to: {file_path}")
 
+    def select_nav_file_for_plotting(self):
+        """Select navigation file for plotting (text files with heave data)"""
+        file_path = filedialog.askopenfilename(
+            title="Select Navigation File for Plotting (Text with Heave Data)",
+            filetypes=[("Text Files", "*.txt"), ("CSV Files", "*.csv"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.nav_plot_file_path.set(file_path)
+            self.log_message(f"Navigation plot file set to: {file_path}")
+
     def select_visibility_file(self, file_type):
         """Select model file or training data directory for visibility analyzer"""
         if file_type == "model":
