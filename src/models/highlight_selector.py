@@ -172,7 +172,7 @@ class HighlightSelector:
             log_message(f"Selecting {count} highlight images based on image metrics...", progress=10)
             
             # Check if metrics already exist in CSV
-            log_message("Checking for existing metrics in image_locations.csv...", progress=12)
+            log_message("Checking for existing metrics in Image_Locations.csv...", progress=12)
             existing_metrics_df = self.load_metrics_from_csv(output_folder, input_folder)
             
             # Set up visibility map
@@ -201,6 +201,14 @@ class HighlightSelector:
                         all_image_paths.append(full_path)
             
             log_message(f"Found {len(all_image_paths)} images in dataset", progress=20)
+            
+            # Log some sample paths for debugging
+            if len(all_image_paths) > 0:
+                log_message(f"Sample image paths:")
+                for i, path in enumerate(all_image_paths[:5]):  # Show first 5
+                    log_message(f"  {i+1}: {path}")
+                if len(all_image_paths) > 5:
+                    log_message(f"  ... and {len(all_image_paths) - 5} more images")
             
             # If we found no images in input_folder, try alternative scanning
             if len(all_image_paths) == 0:
@@ -232,7 +240,7 @@ class HighlightSelector:
                 # Load altitude data from CSV if available
                 altitude_map = {}
                 try:
-                    csv_path = os.path.join(output_folder, "image_locations.csv")
+                    csv_path = os.path.join(output_folder, "Image_Locations.csv")
                     if os.path.exists(csv_path):
                         df = self._pd.read_csv(csv_path)
                         if 'filename' in df.columns and 'altitude' in df.columns:
@@ -331,8 +339,17 @@ class HighlightSelector:
                 
                 # Process images for metrics
                 image_metrics = []
+                start_time = time.time()
+                
                 for i, img_path in enumerate(all_image_paths):
                     try:
+                        # Log progress more frequently for large datasets
+                        if i % 10 == 0 or i < 50:  # Log first 50 and then every 10th
+                            elapsed = time.time() - start_time
+                            rate = i / elapsed if elapsed > 0 and i > 0 else 0
+                            eta = (len(all_image_paths) - i) / rate if rate > 0 else 0
+                            log_message(f"Processing image {i+1}/{len(all_image_paths)} - {os.path.basename(img_path)} (Rate: {rate:.1f} img/s, ETA: {eta/60:.1f}min)")
+                        
                         # Calculate basic metrics
                         metrics = self.calculate_image_metrics(img_path)
                         
@@ -367,15 +384,16 @@ class HighlightSelector:
                             
                             image_metrics.append(metrics)
                             
-                        # Update progress periodically
-                        if progress_callback and (i % 100 == 0 or i == len(all_image_paths) - 1):
+                        # Update progress more frequently
+                        if progress_callback and (i % 50 == 0 or i == len(all_image_paths) - 1):
                             progress = 50 + int((i / len(all_image_paths)) * 35)  # Progress from 50% to 85%
                             log_message(f"Processed {i+1}/{len(all_image_paths)} images", progress=progress)
                             
                     except Exception as e:
                         log_message(f"Error processing {img_path}: {e}")
 
-                log_message(f"Calculated metrics for {len(image_metrics)} images", progress=85)
+                total_time = time.time() - start_time
+                log_message(f"Calculated metrics for {len(image_metrics)} images in {total_time:.1f} seconds", progress=85)
                 
                 # Convert to DataFrame for easier filtering and sorting
                 metrics_df = self._pd.DataFrame(image_metrics)
@@ -474,9 +492,9 @@ class HighlightSelector:
                 except Exception as e:
                     log_message(f"Warning: Could not create HTML gallery: {e}")
                 
-                # Create highlight panel
+                # Create highlight panel in the main output directory
                 try:
-                    panel_path = self.create_highlight_panel(highlight_dir, top_images, top_count=4)
+                    panel_path = self.create_highlight_panel(highlight_dir, output_folder, top_images, top_count=4)
                     if panel_path:
                         log_message(f"Created highlight panel: {os.path.basename(panel_path)}")
                 except Exception as e:
@@ -1066,12 +1084,13 @@ class HighlightSelector:
             print(f"Error creating highlights HTML: {e}")
             return os.path.join(highlight_dir, "highlights.html")  # Return path even if failed
 
-    def create_highlight_panel(self, highlight_dir: str, metrics_df, top_count: int = 4) -> str:
+    def create_highlight_panel(self, highlight_dir: str, output_folder: str, metrics_df, top_count: int = 4) -> str:
         """
         Create a multi-panel image with the top highlights for report inclusion
         
         Args:
             highlight_dir: Directory with highlight images
+            output_folder: Main output directory where the panel will be saved
             metrics_df: DataFrame with selected images and their metrics
             top_count: Number of top images to include (default: 4)
             
@@ -1298,7 +1317,8 @@ class HighlightSelector:
                 ax.set_yticks([])
             
             # Save the panel image with tight bbox to eliminate extra margins
-            panel_path = os.path.join(highlight_dir, "top_highlights_panel.png")
+            # Save to the main output directory with standardized name
+            panel_path = os.path.join(output_folder, "Image_Top_Highlights.png")
             fig.savefig(panel_path, dpi=300, bbox_inches='tight')
             self._plt.close(fig)
             
@@ -1310,10 +1330,10 @@ class HighlightSelector:
 
     def export_metrics_to_csv(self, output_folder: str, metrics_df) -> bool:
         """
-        Export image metrics to the image_locations.csv file
+        Export image metrics to the Image_Locations.csv file
         
         Args:
-            output_folder: Directory containing image_locations.csv
+            output_folder: Directory containing Image_Locations.csv
             metrics_df: DataFrame with calculated metrics
             
         Returns:
@@ -1321,14 +1341,14 @@ class HighlightSelector:
         """
         try:
             self._ensure_imports()  # This will import pandas as self._pd
-            csv_path = os.path.join(output_folder, "image_locations.csv")
+            csv_path = os.path.join(output_folder, "Image_Locations.csv")
             
             # Check if the CSV file exists
             if os.path.exists(csv_path):
                 # Load existing CSV
                 try:
                     locations_df = self._pd.read_csv(csv_path)
-                    print(f"Loaded existing image_locations.csv with {len(locations_df)} entries")
+                    print(f"Loaded existing Image_Locations.csv with {len(locations_df)} entries")
                     
                     # Create a mapping of filenames to metrics
                     metrics_dict = {}
@@ -1365,7 +1385,7 @@ class HighlightSelector:
                     
                     # Save the updated CSV
                     locations_df.to_csv(csv_path, index=False)
-                    print(f"Saved updated image_locations.csv with metrics to {csv_path}")
+                    print(f"Saved updated Image_Locations.csv with metrics to {csv_path}")
                     return True
                     
                 except Exception as e:
@@ -1373,26 +1393,12 @@ class HighlightSelector:
                     print(traceback.format_exc())
                     return False
             else:
-                # Create a new CSV with only the metrics data
-                # This will be a simplified version with just the essential columns
-                output_df = metrics_df.copy()
-                
-                # Keep only essential columns
-                essential_cols = ['filename', 'contrast', 'texture', 'color_variance', 
-                                'entropy', 'combined_score']
-                
-                # Add altitude if available
-                if 'altitude' in output_df.columns:
-                    essential_cols.append('altitude')
-                
-                # Filter columns
-                output_cols = [col for col in essential_cols if col in output_df.columns]
-                output_df = output_df[output_cols]
-                
-                # Save to CSV
-                output_df.to_csv(csv_path, index=False)
-                print(f"Created new image_locations.csv with metrics at {csv_path}")
-                return True
+                # If no existing CSV, we should not create a metrics-only file
+                # The Image_Locations.csv should be created by the main processing pipeline first
+                # with GPS/EXIF data, and then we add metrics to it
+                print("Warning: Image_Locations.csv not found. Cannot add metrics without location data.")
+                print("The location CSV should be created by the main processing pipeline first.")
+                return False
                 
         except Exception as e:
             print(f"Error exporting metrics to CSV: {e}")
@@ -1401,10 +1407,10 @@ class HighlightSelector:
 
     def load_metrics_from_csv(self, output_folder: str, input_folder: str):
         """
-        Load pre-calculated metrics from image_locations.csv if available
+        Load pre-calculated metrics from Image_Locations.csv if available
         
         Args:
-            output_folder: Directory containing image_locations.csv
+            output_folder: Directory containing Image_Locations.csv
             input_folder: Directory with input images to match with metrics
             
         Returns:
@@ -1412,10 +1418,10 @@ class HighlightSelector:
         """
         try:
             self._ensure_imports()  # This will import pandas as self._pd
-            csv_path = os.path.join(output_folder, "image_locations.csv")
+            csv_path = os.path.join(output_folder, "Image_Locations.csv")
             
             if not os.path.exists(csv_path):
-                print("No existing image_locations.csv found")
+                print("No existing Image_Locations.csv found")
                 return self._pd.DataFrame()
             
             # Load the CSV
@@ -1492,6 +1498,11 @@ class HighlightSelector:
             import numpy as np
             from PIL import Image, ImageStat
             
+            # Check if file exists and is readable
+            if not os.path.exists(img_path):
+                print(f"Warning: Image file does not exist: {img_path}")
+                return None
+                      
             # Load image
             with Image.open(img_path) as img:
                 # Convert to RGB if necessary

@@ -82,7 +82,7 @@ class UIComponents:
         # Help text for batch CSV format
         help_text = ttk.Label(
             self.batch_csv_frame, 
-            text="CSV must contain columns: input_folder, output_folder, nav_file (optional), nav_plot_file (optional), lls_folder (optional), phins_nav_file (optional)",
+            text="CSV columns: NAV_STATE_file, PHINS_INS_file, LLS_Input, PhinsData_Bin_file, Image_Input, Dive_Nav_file, Output_folder (required). Each processing module can run independently.",
             font=('TkDefaultFont', 8),
             foreground='gray'
         )

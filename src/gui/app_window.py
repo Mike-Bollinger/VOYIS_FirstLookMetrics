@@ -60,7 +60,7 @@ class AppWindow(UIComponents, ProcessingController):
         self.phins_nav_path = tk.StringVar()
         
         # Navigation processing paths (for plotting - text files with heave data)
-        self.nav_processing_var = tk.BooleanVar(value=False)
+        self.nav_processing_var = tk.BooleanVar(value=True)
         self.nav_plot_file_path = tk.StringVar()  # PHINS file
         self.nav_state_file_path = tk.StringVar()  # NAV_STATE file
         
@@ -705,28 +705,34 @@ class AppWindow(UIComponents, ProcessingController):
         try:
             df = pd.read_csv(csv_path)
             
-            required_cols = ['input_folder', 'output_folder']
-            optional_cols = ['nav_file', 'lls_folder', 'phins_nav_file']
+            # Required and optional column names
+            required_cols = ['Output_folder']
+            optional_cols = ['NAV_STATE_file', 'PHINS_INS_file', 'LLS_Input', 'PhinsData_Bin_file', 'Image_Input', 'Dive_Nav_file']
             
+            # Check if we have the required column
             missing_required = [col for col in required_cols if col not in df.columns]
             if missing_required:
                 messagebox.showerror(
                     "Invalid CSV Format", 
                     f"Missing required columns: {', '.join(missing_required)}\n\n"
-                    f"Required columns: {', '.join(required_cols)}\n"
-                    f"Optional columns: {', '.join(optional_cols)}"
+                    f"Required: {', '.join(required_cols)}\n"
+                    f"Optional: {', '.join(optional_cols)}\n\n"
+                    f"Found columns: {', '.join(df.columns)}"
                 )
                 return False
             
             self.log_message(f"Batch CSV validated successfully: {len(df)} entries found")
             
             # Show summary of what will be processed
-            lls_count = df['lls_folder'].notna().sum() if 'lls_folder' in df.columns else 0
-            imagery_count = df['input_folder'].notna().sum()
+            lls_count = df['LLS_Input'].notna().sum() if 'LLS_Input' in df.columns else 0
+            imagery_count = df['Image_Input'].notna().sum() if 'Image_Input' in df.columns else 0
+            nav_count = df['NAV_STATE_file'].notna().sum() if 'NAV_STATE_file' in df.columns else 0
             
-            self.log_message(f"  - {imagery_count} imagery processing jobs")
+            self.log_message(f"  - {imagery_count} image analysis jobs")
             if lls_count > 0:
                 self.log_message(f"  - {lls_count} LLS processing jobs")
+            if nav_count > 0:
+                self.log_message(f"  - {nav_count} navigation processing jobs")
             
             return True
             
@@ -744,37 +750,35 @@ class AppWindow(UIComponents, ProcessingController):
         
         if file_path:
             try:
-                # Create template data with examples
+                # Create template data with standardized column names
                 template_data = {
-                    'input_folder': [
-                        'C:/path/to/imagery/folder1',
-                        'C:/path/to/imagery/folder2',
-                        'C:/path/to/imagery/folder3'
+                    'NAV_STATE_file': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/NAV_STATE.txt',
+                        'D:/AUV/VOYIS/PC-24-04/DIVE004/Vehicle_Data/NAV_STATE.txt'
                     ],
-                    'output_folder': [
-                        'C:/path/to/output/folder1',
-                        'C:/path/to/output/folder2', 
-                        'C:/path/to/output/folder3'
+                    'PHINS_INS_file': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/PHINS INS.txt',
+                        'D:/AUV/VOYIS/PC-24-03/DIVE004/Vehicle_Data/PHINS INS.txt'
                     ],
-                    'nav_file': [
-                        'C:/path/to/nav/file1.txt',
-                        '',  # Optional - can be empty
-                        'C:/path/to/nav/file3.txt'
+                    'LLS_Input': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/LLS',
+                        'D:/AUV/VOYIS/PC-24-04/DIVE004/LLS'
                     ],
-                    'nav_plot_file': [
-                        'C:/path/to/nav_plot/file1.txt',
-                        'C:/path/to/nav_plot/file2.txt',
-                        ''  # Optional - can be empty if no navigation plotting needed
+                    'PhinsData_Bin_file': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/phinsdata_20240627_0535.bin',
+                        'D:/AUV/VOYIS/PC-24-04/DIVE004/Vehicle_Data/phinsdata_20240628_0630.bin'
                     ],
-                    'lls_folder': [
-                        'C:/path/to/lls/folder1',
-                        'C:/path/to/lls/folder2',
-                        ''  # Optional - can be empty if no LLS processing needed
+                    'Image_Input': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/DIVE003_raw_jpg_advanced',
+                        'D:/AUV/VOYIS/PC-24-04/DIVE004/DIVE004_raw_jpg_advanced'
                     ],
-                    'phins_nav_file': [
-                        'C:/path/to/phins/nav1.bin',
-                        'C:/path/to/phins/nav2.bin',
-                        ''  # Optional - can be empty if no LLS processing needed
+                    'Dive_Nav_file': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/DIVE003_NAV.txt',
+                        'D:/AUV/VOYIS/PC-24-05/DIVE005/Vehicle_Data/DIVE005_NAV.txt'
+                    ],
+                    'Output_folder': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Report_Plots',
+                        'D:/AUV/VOYIS/PC-24-04/DIVE004/Report_Plots'
                     ]
                 }
                 
@@ -786,8 +790,11 @@ class AppWindow(UIComponents, ProcessingController):
                     "Template Created", 
                     f"Batch processing CSV template created at:\n{file_path}\n\n"
                     "Edit this file with your actual folder paths, then load it for batch processing.\n\n"
-                    "Required columns: input_folder, output_folder\n"
-                    "Optional columns: nav_file, nav_plot_file, lls_folder, phins_nav_file"
+                    "Required: Output_folder (always required)\n"
+                    "Navigation Module: NAV_STATE_file, PHINS_INS_file\n"
+                    "Image Analysis Module: Image_Input, Dive_Nav_file\n"
+                    "LLS Analysis Module: LLS_Input, PhinsData_Bin_file\n"
+                    "Each module can be run independently."
                 )
                 
             except Exception as e:

@@ -96,7 +96,8 @@ class ProcessingStages:
         try:
             result_files = self.altitude_map.export_to_gis_formats(
                 self.metrics.gps_data,
-                output_folder
+                output_folder,
+                csv_filename="Image_Locations.csv"
             )
             
             if 'csv' in result_files:

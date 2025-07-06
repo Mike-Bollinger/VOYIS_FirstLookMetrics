@@ -177,6 +177,14 @@ class ProcessingController:
                     
                     self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
                     
+                    # Always create Image_Locations.csv if we have GPS data
+                    if self.metrics.gps_data:
+                        try:
+                            self.create_location_csv(output_folder)
+                            self.log_message("✓ Created Image_Locations.csv with GPS and EXIF data")
+                        except Exception as csv_error:
+                            self.log_message(f"⚠ Error creating Image_Locations.csv: {csv_error}")
+                    
                 except Exception as metadata_error:
                     self.log_message(f"✗ Error extracting metadata: {metadata_error}")
                     self.log_message("Cannot proceed without image metadata")
@@ -279,12 +287,15 @@ class ProcessingController:
             if hasattr(self, 'process_button'):
                 self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
-    def process_navigation_data(self, output_folder):
+    def process_navigation_data(self, output_folder, nav_state_file=None, phins_file=None):
         """Process navigation data for plotting"""
-        self.log_message("STAGE -1: Processing Navigation data for plotting...")
+        self.log_message("STAGE 1: Processing Navigation data for plotting...")
         
-        nav_state_file = self.nav_state_file_path.get()
-        phins_file = self.nav_plot_file_path.get()
+        # Use provided parameters or fall back to GUI variables
+        if nav_state_file is None:
+            nav_state_file = self.nav_state_file_path.get()
+        if phins_file is None:
+            phins_file = self.nav_plot_file_path.get()
         
         if not nav_state_file or not os.path.exists(nav_state_file):
             self.log_message("Warning: NAV_STATE file not specified or doesn't exist. Skipping navigation processing.")
@@ -317,7 +328,7 @@ class ProcessingController:
 
     def process_lls_data(self, output_folder):
         """Process LLS data"""
-        self.log_message("STAGE 0: Processing LLS (Laser Line Scan) data...")
+        self.log_message("STAGE 2: Processing LLS (Laser Line Scan) data...")
         
         lls_folder = self.lls_path.get()
         phins_nav_file = self.phins_nav_path.get()
@@ -855,13 +866,14 @@ class ProcessingController:
                 self.log_message(f"{'='*60}")
                 
                 try:
-                    # Set up job-specific paths
-                    input_folder = row.get('input_folder', '').strip()
-                    output_folder = row.get('output_folder', '').strip()
-                    nav_file = row.get('nav_file', '').strip()
-                    lls_folder = row.get('lls_folder', '').strip()
-                    phins_nav_file = row.get('phins_nav_file', '').strip()
-                    nav_plot_file = row.get('nav_plot_file', '').strip()
+                    # Set up job-specific paths using standardized column names
+                    input_folder = row.get('Image_Input', '').strip()
+                    output_folder = row.get('Output_folder', '').strip()
+                    nav_file = row.get('Dive_Nav_file', '').strip()
+                    lls_folder = row.get('LLS_Input', '').strip()
+                    phins_nav_file = row.get('PhinsData_Bin_file', '').strip()
+                    nav_plot_file = row.get('NAV_STATE_file', '').strip()
+                    phins_ins_file = row.get('PHINS_INS_file', '').strip()
                     
                     # Convert empty strings to None for cleaner logic
                     input_folder = input_folder if input_folder else None
@@ -870,15 +882,24 @@ class ProcessingController:
                     lls_folder = lls_folder if lls_folder else None
                     phins_nav_file = phins_nav_file if phins_nav_file else None
                     nav_plot_file = nav_plot_file if nav_plot_file else None
+                    phins_ins_file = phins_ins_file if phins_ins_file else None
                     
-                    # Validate required paths
-                    if not input_folder and not lls_folder and not nav_plot_file:
-                        self.log_message(f"Job {job_num}: Skipping - no input_folder, lls_folder, or nav_plot_file specified")
+                    # Validate required paths - only output is always required
+                    if not output_folder:
+                        self.log_message(f"Job {job_num}: Skipping - no Output_folder specified")
                         failed_jobs += 1
                         continue
                     
-                    if not output_folder:
-                        self.log_message(f"Job {job_num}: Skipping - no output_folder specified")
+                    # Check if we have inputs for at least one processing module
+                    has_nav_module = nav_plot_file or phins_ins_file
+                    has_image_module = input_folder
+                    has_lls_module = lls_folder and phins_nav_file
+                    
+                    if not (has_nav_module or has_image_module or has_lls_module):
+                        self.log_message(f"Job {job_num}: Skipping - no valid processing module inputs specified")
+                        self.log_message(f"  Navigation module needs: NAV_STATE_file or PHINS_INS_file")
+                        self.log_message(f"  Image module needs: Image_Input")
+                        self.log_message(f"  LLS module needs: LLS_Input and PhinsData_Bin_file")
                         failed_jobs += 1
                         continue
                     
@@ -898,7 +919,7 @@ class ProcessingController:
                     # Process this job
                     self.process_single_batch_job(
                         job_num, input_folder, output_folder, 
-                        nav_file, lls_folder, phins_nav_file, nav_plot_file
+                        nav_file, lls_folder, phins_nav_file, nav_plot_file, phins_ins_file
                     )
                     
                     self.log_message(f"Job {job_num} completed successfully")
@@ -929,17 +950,20 @@ class ProcessingController:
             self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
     def process_single_batch_job(self, job_num, input_folder, output_folder, 
-                                nav_file, lls_folder, phins_nav_file, nav_plot_file):
+                                nav_file, lls_folder, phins_nav_file, nav_plot_file, phins_ins_file=None):
         """Process a single job from the batch CSV"""
         
         # Determine what processing is needed
-        has_nav_plot = nav_plot_file and os.path.exists(nav_plot_file)
+        has_nav_module = (nav_plot_file and os.path.exists(nav_plot_file)) or (phins_ins_file and os.path.exists(phins_ins_file))
         has_lls = lls_folder and os.path.exists(lls_folder) and phins_nav_file and os.path.exists(phins_nav_file)
         has_imagery = input_folder and os.path.exists(input_folder)
         
         self.log_message(f"Job {job_num} processing:")
-        if has_nav_plot:
-            self.log_message(f"  - Navigation plot file: {nav_plot_file}")
+        if has_nav_module:
+            if nav_plot_file:
+                self.log_message(f"  - Navigation plot file: {nav_plot_file}")
+            if phins_ins_file:
+                self.log_message(f"  - PHINS INS file: {phins_ins_file}")
         if has_lls:
             self.log_message(f"  - LLS folder: {lls_folder}")
             self.log_message(f"  - Phins nav: {phins_nav_file}")
@@ -949,7 +973,7 @@ class ProcessingController:
                 self.log_message(f"  - Nav file: {nav_file}")
         self.log_message(f"  - Output folder: {output_folder}")
         
-        if not has_nav_plot and not has_lls and not has_imagery:
+        if not has_nav_module and not has_lls and not has_imagery:
             self.log_message(f"Job {job_num}: No valid inputs found - skipping")
             return
         
@@ -974,9 +998,13 @@ class ProcessingController:
             else:
                 self.lls_path.set('')
                 self.phins_nav_path.set('')
-            if has_nav_plot:
-                self.nav_plot_file_path.set(nav_plot_file)
+            if has_nav_module:
+                if nav_plot_file:  # This is NAV_STATE_file from CSV
+                    self.nav_state_file_path.set(nav_plot_file)
+                if phins_ins_file:  # This is PHINS_INS_file from CSV
+                    self.nav_plot_file_path.set(phins_ins_file)
             else:
+                self.nav_state_file_path.set('')
                 self.nav_plot_file_path.set('')
             
             self.output_path.set(output_folder)
@@ -984,10 +1012,10 @@ class ProcessingController:
             # Process this job
             try:
                 # Process Navigation data if selected and available
-                if has_nav_plot and self.nav_processing_var.get():
+                if has_nav_module and self.nav_processing_var.get():
                     self.log_message(f"Job {job_num}: Processing Navigation data...")
                     try:
-                        self.process_navigation_data(output_folder)
+                        self.process_navigation_data(output_folder, nav_plot_file, phins_ins_file)
                         self.log_message(f"Job {job_num}: ✓ Navigation processing completed")
                     except Exception as nav_error:
                         self.log_message(f"Job {job_num}: ✗ Navigation processing failed: {nav_error}")
@@ -1266,8 +1294,8 @@ class ProcessingController:
                     return False
                 
                 # Check required columns
-                required_columns = ['output_folder']
-                optional_columns = ['input_folder', 'nav_file', 'lls_folder', 'phins_nav_file']
+                required_columns = ['Output_folder']
+                optional_columns = ['Image_Input', 'Dive_Nav_file', 'LLS_Input', 'PhinsData_Bin_file', 'NAV_STATE_file', 'PHINS_INS_file']
                 
                 missing_required = [col for col in required_columns if col not in df.columns]
                 if missing_required:
@@ -1343,3 +1371,28 @@ class ProcessingController:
         except Exception as e:
             self.log_message(f"⚠️ Warning: Could not validate visibility model: {e}")
             return True  # Don't fail validation for visibility model issues
+    
+    def create_location_csv(self, output_folder):
+        """Create Image_Locations.csv file with GPS and EXIF data"""
+        try:
+            csv_path = os.path.join(output_folder, "Image_Locations.csv")
+            import pandas as pd
+            df = pd.DataFrame(self.metrics.gps_data)
+            
+            # Define preferred column order
+            columns = ["filename", "DateTime", "latitude", "longitude", "altitude",
+                      "SubjectDistance", "ExposureTime", "FNumber", "FocalLength",
+                      "width", "height"]
+            
+            # Get available columns in preferred order, then add any others
+            available_cols = [col for col in columns if col in df.columns]
+            other_cols = [col for col in df.columns if col not in columns]
+            
+            df = df[available_cols + other_cols]
+            df.to_csv(csv_path, index=False)
+            
+            return csv_path
+            
+        except Exception as e:
+            self.log_message(f"Error creating Image_Locations.csv: {e}")
+            return None
