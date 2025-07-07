@@ -43,7 +43,7 @@ class ProcessingStages:
                 for line in results:
                     self.log_message(line)
                 
-                output_file = os.path.join(output_folder, "image_metrics.txt")
+                output_file = os.path.join(output_folder, "Image_Metrics.txt")
                 with open(output_file, "w") as f:
                     f.write("\n".join(results))
                 

@@ -226,7 +226,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_xlim(Start, End)
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Depin_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_DEPIN_Data.png"))
 
     # Plotting GPS Data
     if 'GPSIN_' in data_frames:
@@ -237,7 +237,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('GPS Data over Time')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Gpsin_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_GPSIN_Data.png"))
     # Plotting Position Data
     if 'POSITI' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -247,7 +247,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('POSITI Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Positi_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_POSITI_Data.png"))
     # Plotting Heave Data
     if 'HEAVE_' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -259,7 +259,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('HEAVE Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Heave_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_HEAVE_Data.png"))
     # Plotting Speed Data
     if 'SPEED_' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -272,7 +272,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('SPEED Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Speed_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_SPEED_Data.png"))
     # Plotting STDPOS Data
     if 'STDPOS' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -283,7 +283,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('STDPOS Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Stdpos_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_STDPOS_Data.png"))
     # Plotting Heading Data
     if 'HETHS' in data_frames and 'HEHDT' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -294,7 +294,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('Heading HETHS and HEHDT Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Heths_Hehdt_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_HETHS_HEHDT_Data.png"))
     # Plotting ATITUD Data
     if 'ATITUD' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -305,7 +305,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('ATITUD Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Atitud_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_ATITUD_Data.png"))
     # Plotting STDHRP Data
     if 'STDHRP' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -317,7 +317,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('STDHRP Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Stdhrp_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_STDHRP_Data.png"))
     # Plotting LOGDVL Data
     if 'LOGDVL' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -327,7 +327,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('LOGDVL Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Logdvl_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_LOGDVL_Data.png"))
     # Plotting UTMWGS Data
     if 'UTMWGS' in data_frames:
         fig, ax = plt.subplots(figsize=(19.2, 10.8))
@@ -337,7 +337,7 @@ def plot_Phins_Data(data_frames,Start,End,Savefile=None):
         ax.set_title('UTMWGS Data')
         ax.legend()
         if Savefile:
-            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_Utmwgs_Data.png"))
+            plt.savefig(os.path.join(os.path.dirname(Savefile), "Nav_UTMWGS_Data.png"))
 
 def Var_plot(Dir,Filename, Variable, StartDive, EndDive):
     """
@@ -406,9 +406,16 @@ def basic_analysis(Dir, Avg_dive_time):
 
     plot_change_rate(VehicleDir, StartDive, EndDive, VehicleOutputDir)
 
-def phins_check(Dir):
+def phins_check(Dir, output_dir=None):
     # check if .csv files have been created
-    VehicleOutputDir=Dir.replace('Vehicle_Data','Vehicle_Output')
+    if output_dir:
+        VehicleOutputDir = output_dir
+    else:
+        VehicleOutputDir = Dir.replace('Vehicle_Data','Vehicle_Output')
+    
+    # Ensure the output directory exists
+    if not os.path.exists(VehicleOutputDir):
+        os.makedirs(VehicleOutputDir)
 
     files_to_check = ['DEPIN_', 'GPSIN_', 'ATITUD', 'UTMWGS', 'LOGDVL', 'HEHDT', 'HETHS']
     for file in files_to_check:

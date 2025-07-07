@@ -388,7 +388,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     # plt.title('Histogram of Good Btm Depth Values')
     # plt.xlim(0, -150)
     plt.grid()
-    plt.savefig(os.path.join(plot_dir, "LLS_Auv_Depth_Histogram.png"), facecolor='white', bbox_inches='tight')
+    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Depth_Histogram.png"), facecolor='white', bbox_inches='tight')
     plt.close()
     log_message("Generated depth histogram")
 
@@ -537,7 +537,7 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
 
     # find Phins compile data
     log_message("Checking Phins navigation data...")
-    phins.phins_check(VehicleDir)
+    phins.phins_check(VehicleDir, VehicleOutputDir)
 
     if xyz_files is None:
         # optional to specify XYZ files, otherwise find all LLS_*.xyz files

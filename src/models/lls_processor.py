@@ -95,6 +95,7 @@ class LLSProcessor:
                 MIN_INTENSITY_THRESHOLD=self.min_intensity_threshold,
                 BAD_POINT_THRESHOLD=self.bad_point_threshold,
                 RADIUS=self.radius,
+                gui_output_dir=output_folder,  # Pass the GUI output directory
                 xyz_files=None,  # Let it find all LLS_*.xyz files
                 log_callback=self.log_message  # Pass the log callback
             )
@@ -299,30 +300,36 @@ class LLSProcessor:
     
     def copy_results_to_output(self, temp_dir: str, output_folder: str):
         """Copy processing results from temporary directory to final output"""
-        # Create LLS output subdirectory
-        lls_output_dir = os.path.join(output_folder, 'LLS_Output')
-        os.makedirs(lls_output_dir, exist_ok=True)
+        # Since we're now passing gui_output_dir directly to Step01_Find_Good_Data,
+        # the files should already be in the correct output location.
+        # We only need to copy any files that might still be in the temp directory.
         
-        # Copy results from temp LLS_Output to final location
+        files_copied = 0
+        
+        # Check if there are any LLS_Output files in temp that weren't copied directly
         temp_lls_output = os.path.join(temp_dir, 'LLS_Output')
         if os.path.exists(temp_lls_output):
             for file in os.listdir(temp_lls_output):
                 src = os.path.join(temp_lls_output, file)
-                dst = os.path.join(lls_output_dir, file)
-                if os.path.isfile(src):
+                dst = os.path.join(output_folder, file)
+                if os.path.isfile(src) and not os.path.exists(dst):
                     shutil.copy2(src, dst)
                     self.log_message(f"Copied {file} to output directory")
+                    files_copied += 1
         
-        # Also copy vehicle output if it exists
-        vehicle_output_dir = os.path.join(output_folder, 'Vehicle_Output')
+        # Check if there are any Vehicle_Output files in temp that weren't copied directly
         temp_vehicle_output = os.path.join(temp_dir, 'Vehicle_Output')
         if os.path.exists(temp_vehicle_output):
-            os.makedirs(vehicle_output_dir, exist_ok=True)
             for file in os.listdir(temp_vehicle_output):
                 src = os.path.join(temp_vehicle_output, file)
-                dst = os.path.join(vehicle_output_dir, file)
-                if os.path.isfile(src):
+                dst = os.path.join(output_folder, file)
+                if os.path.isfile(src) and not os.path.exists(dst):
                     shutil.copy2(src, dst)
+                    self.log_message(f"Copied {file} to output directory")
+                    files_copied += 1
+        
+        if files_copied == 0:
+            self.log_message("All files already in target output directory")
         
         # Clean up temporary directory
         try:

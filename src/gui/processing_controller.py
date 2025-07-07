@@ -487,7 +487,7 @@ class ProcessingController:
                     self.log_message(f"       {line}")
                 
                 # Save results to file
-                metrics_file = os.path.join(output_folder, "image_metrics.txt")
+                metrics_file = os.path.join(output_folder, "Image_Metrics.txt")
                 with open(metrics_file, "w") as f:
                     f.write("\n".join(results))
                 
@@ -1054,6 +1054,10 @@ class ProcessingController:
                                         self.log_message(f"Job {job_num}: ⚠ Navigation data load failed - continuing without it")
                                 except Exception as nav_error:
                                     self.log_message(f"Job {job_num}: ⚠ Navigation data error: {nav_error}")
+                            elif nav_file:
+                                self.log_message(f"Job {job_num}: Navigation file not found: {nav_file}")
+                            else:
+                                self.log_message(f"Job {job_num}: No navigation file specified - will use default heading")
                             
                             # IMPORTANT: Process basic metrics FIRST to populate GPS data
                             try:
