@@ -102,9 +102,7 @@ class ProcessingController:
         try:
             self.analyze_images(input_folder, output_folder)
             
-            self.log_message("\nAll selected processing tasks completed successfully.")
-            self.update_progress(100, "Processing complete!")
-            self.play_completion_sound()
+            # Note: Completion message and progress update are now handled in analyze_images overall summary
             
         except Exception as e:
             self.log_message(f"\nError during processing: {str(e)}")
@@ -130,6 +128,17 @@ class ProcessingController:
                 self.highlight_selector_var.get()
             ])
             
+            # Load PhinsData for specific modules if needed (not for imagery)
+            phins_data_manager = None
+            # Log file paths for debugging (no longer using PhinsData manager)
+            if nav_selected or lls_selected:
+                phins_file = None
+                if hasattr(self, 'phins_nav_path') and self.phins_nav_path.get():
+                    file_path = self.phins_nav_path.get()
+                    if file_path and os.path.exists(file_path):
+                        phins_file = file_path
+                        self.log_message(f"       Phins nav file: {phins_file}")
+            
             # Process Navigation data first if selected
             if nav_selected:
                 self.log_message("Processing Navigation data...")
@@ -152,16 +161,35 @@ class ProcessingController:
             
             # Process imagery data if selected
             if imagery_selected:
-                # Load navigation data if provided and needed
-                nav_file = self.nav_path.get()
-                if nav_file and os.path.exists(nav_file):
+                self.log_message("Processing Imagery data...")
+                self.log_message("       ⚠ Note: Imagery processing uses ONLY navigation text file data, not PhinsData")
+                
+                # Ensure we clear any residual PhinsData influence from previous nav/lls processing
+                self._clear_phins_data_from_imagery_modules()
+                
+                # Load navigation data from dive nav text file ONLY for imagery
+                nav_file = None
+                # Only use nav_path for imagery processing (Dive Nav text file)
+                if hasattr(self, 'nav_path') and self.nav_path.get():
+                    file_path = self.nav_path.get()
+                    if file_path and os.path.exists(file_path):
+                        nav_file = file_path
+                        self.log_message(f"       Navigation source for imagery: {os.path.basename(nav_file)} (Dive Nav text file)")
+                    else:
+                        self.log_message(f"       ⚠ Dive Nav text file not found: {file_path}")
+                else:
+                    self.log_message("       ⚠ No Dive Nav text file specified for imagery processing")
+                
+                if nav_file:
                     try:
-                        if self.load_navigation_data(nav_file):
-                            self.log_message("✓ Navigation data loaded successfully")
+                        if self.load_navigation_data_for_imagery_only(nav_file):
+                            self.log_message("✓ Navigation data loaded successfully from text file for imagery processing")
                         else:
                             self.log_message("⚠ Navigation data load failed - continuing without it")
                     except Exception as nav_error:
                         self.log_message(f"⚠ Navigation data error: {nav_error}")
+                else:
+                    self.log_message("⚠ No navigation file specified - continuing without navigation data")
                 
                 # IMPORTANT: Process basic metrics FIRST to populate GPS data
                 try:
@@ -169,9 +197,16 @@ class ProcessingController:
                     
                     # Always extract GPS data for other stages
                     extract_gps = True
+                    
+                    # Create a progress callback that reports to the main log
+                    def metadata_progress(progress_pct, message):
+                        # Update progress every 10% or on important messages
+                        if progress_pct % 10 == 0 or "GPS data from" in message or "files" in message:
+                            self.log_message(f"[{progress_pct:.0f}%] {message}")
+                    
                     processed_files, results = self.metrics.analyze_directory(
                         input_folder,
-                        progress_callback=None,
+                        progress_callback=metadata_progress,
                         extract_gps=extract_gps
                     )
                     
@@ -216,7 +251,45 @@ class ProcessingController:
                 else:
                     self.log_message(f"Processing {len(processing_stages)} imagery stages...")
                     
-                    # Process each stage
+                    # STEP 1: Create/update the master Image_Metrics.csv as the first step
+                    self.log_message("STEP 1: Creating/updating master Image_Metrics.csv...")
+                    try:
+                        # Use the PhinsData file path for navigation integration
+                        nav_file = None
+                        for var_name in ['nav_path', 'phins_nav_path', 'nav_file_path']:
+                            if hasattr(self, var_name):
+                                file_path = getattr(self, var_name).get()
+                                if file_path and os.path.exists(file_path):
+                                    nav_file = file_path
+                                    break
+                        
+                        if hasattr(self.metrics, 'create_image_metrics_csv_parallel'):
+                            csv_path = self.metrics.create_image_metrics_csv_parallel(
+                                input_folder, 
+                                output_folder, 
+                                nav_file, 
+                                progress_callback=lambda p, msg="Creating master CSV...": self.update_progress(p, msg)
+                            )
+                        else:
+                            # Fallback to original method
+                            csv_path = self.metrics.create_image_metrics_csv(
+                                input_folder, 
+                                output_folder, 
+                                nav_file, 
+                                progress_callback=lambda p, msg="Creating master CSV...": self.update_progress(p, msg)
+                            )
+                        
+                        if csv_path:
+                            self.log_message(f"✓ Created Image_Metrics.csv: {os.path.basename(csv_path)}")
+                        else:
+                            self.log_message("⚠ Failed to create Image_Metrics.csv")
+                        
+                    except Exception as e:
+                        self.log_message(f"⚠ Error creating Image_Metrics.csv: {e}")
+                        self.log_message("Processing will continue without master CSV")
+                    
+                    # STEP 2: Process each stage
+                    self.log_message("STEP 2: Processing individual analysis stages...")
                     completed_stages = 0
                     total_stages = len(processing_stages)
                     
@@ -258,11 +331,13 @@ class ProcessingController:
                         self.log_message(f"⚠ Imagery processing completed with {total_stages - completed_stages} errors")
             
             # Final overall summary
-            total_processes = (1 if lls_selected else 0) + (1 if imagery_selected else 0)
+            total_processes = (1 if nav_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
             self.log_message(f"\n{'='*60}")
             self.log_message(f"OVERALL PROCESSING SUMMARY")
             self.log_message(f"{'='*60}")
             
+            if nav_selected:
+                self.log_message("Navigation Processing: Completed")
             if lls_selected:
                 self.log_message("LLS Processing: Completed")
             if imagery_selected:
@@ -287,24 +362,9 @@ class ProcessingController:
             if hasattr(self, 'process_button'):
                 self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
-    def process_navigation_data(self, output_folder, nav_state_file=None, phins_file=None):
-        """Process navigation data for plotting"""
+    def process_navigation_data(self, output_folder):
+        """Process navigation data for plotting using text files (NAV_STATE.txt and PHINS INS.txt)"""
         self.log_message("STAGE 1: Processing Navigation data for plotting...")
-        
-        # Use provided parameters or fall back to GUI variables
-        if nav_state_file is None:
-            nav_state_file = self.nav_state_file_path.get()
-        if phins_file is None:
-            phins_file = self.nav_plot_file_path.get()
-        
-        if not nav_state_file or not os.path.exists(nav_state_file):
-            self.log_message("Warning: NAV_STATE file not specified or doesn't exist. Skipping navigation processing.")
-            return
-        
-        # PHINS file is optional
-        if phins_file and not os.path.exists(phins_file):
-            self.log_message("Warning: PHINS file specified but doesn't exist. Proceeding without PHINS heave data.")
-            phins_file = None
         
         try:
             from src.models.nav_plotter import NavPlotter
@@ -312,11 +372,34 @@ class ProcessingController:
             # Create NavPlotter instance with logging
             nav_plotter = NavPlotter(log_callback=self.log_message)
             
-            # Process the navigation data with optional PHINS file
-            success = nav_plotter.process_navigation_data(nav_state_file, output_folder, phins_file)
+            # Get navigation file paths - we use NAV_STATE.txt and PHINS INS.txt
+            nav_file = self.nav_state_file_path.get()  # NAV_STATE.txt
+            phins_file = self.nav_plot_file_path.get()  # PHINS INS.txt
+            
+            # Validate navigation file
+            if not nav_file or not os.path.exists(nav_file):
+                self.log_message("Warning: Navigation file (NAV_STATE.txt) not specified or doesn't exist. Skipping navigation processing.")
+                return
+            
+            self.log_message(f"       Navigation file: {os.path.basename(nav_file)}")
+            
+            # PHINS file is optional for heave data
+            if phins_file and os.path.exists(phins_file):
+                self.log_message(f"       PHINS INS file: {os.path.basename(phins_file)} (for heave data)")
+            else:
+                self.log_message("       No PHINS INS file specified - will use estimated heave from depth changes")
+                phins_file = None
+            
+            # Process navigation data using text files
+            success = nav_plotter.process_navigation_file(
+                nav_file,           # NAV_STATE.txt
+                output_folder,      # Output directory
+                "Navigation_Analysis",  # Dive name
+                phins_file_path=phins_file  # PHINS INS.txt (optional)
+            )
             
             if success:
-                self.log_message("✓ Navigation data processing completed successfully")
+                self.log_message("✓ Navigation processing completed")
             else:
                 self.log_message("✗ Error during navigation data processing")
                 
@@ -327,11 +410,14 @@ class ProcessingController:
             raise
 
     def process_lls_data(self, output_folder):
-        """Process LLS data"""
+        """Process LLS data using text files"""
         self.log_message("STAGE 2: Processing LLS (Laser Line Scan) data...")
         
         lls_folder = self.lls_path.get()
         phins_nav_file = self.phins_nav_path.get()
+        
+        self.log_message(f"       LLS folder: {lls_folder}")
+        self.log_message(f"       Phins nav file: {phins_nav_file}")
         
         if not lls_folder or not os.path.exists(lls_folder):
             self.log_message("Warning: LLS folder not specified or doesn't exist. Skipping LLS processing.")
@@ -371,7 +457,7 @@ class ProcessingController:
             self.log_message(f"Traceback: {traceback.format_exc()}")
 
     def load_navigation_data(self, nav_file):
-        """Load navigation data for altitude information"""
+        """Load navigation data for altitude information (general method, may contain PhinsData influence)"""
         try:
             if not hasattr(self, 'metrics') or not self.metrics:
                 return False
@@ -379,17 +465,6 @@ class ProcessingController:
             success = self.metrics.load_nav_data(nav_file)
             if success:
                 self.log_message(f"       ✓ Navigation data loaded for altitude extraction")
-                
-                # Make nav data available to other components
-                if hasattr(self.metrics, 'nav_timestamps'):
-                    if hasattr(self, 'altitude_map'):
-                        self.altitude_map.nav_timestamps = self.metrics.nav_timestamps
-                    if hasattr(self, 'footprint_map'):
-                        self.footprint_map.nav_timestamps = self.metrics.nav_timestamps
-                    if hasattr(self, 'visibility_analyzer'):
-                        self.visibility_analyzer.nav_timestamps = self.metrics.nav_timestamps
-                    if hasattr(self, 'highlight_selector'):
-                        self.highlight_selector.nav_timestamps = self.metrics.nav_timestamps
                         
                 return True
             else:
@@ -596,18 +671,32 @@ class ProcessingController:
                 # Set altitude threshold
                 self.footprint_map.altitude_threshold = self.altitude_threshold
                 
-                # Get navigation file path if available
-                nav_file_path = None
-                if hasattr(self, 'nav_path') and self.nav_path.get():
-                    nav_file_path = self.nav_path.get()
+                # First try to use the CSV data if available
+                csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+                footprint_file = None
                 
-                # Call the correct method with GPS data from metrics
-                footprint_file = self.footprint_map.create_footprint_map(
-                    self.metrics.gps_data,
-                    output_folder,
-                    nav_file_path=nav_file_path,
-                    filename="Image_Footprints_Map.png"
-                )
+                if os.path.exists(csv_path):
+                    self.log_message("  └─ Using Image_Metrics.csv for footprint analysis...")
+                    # Use the new CSV-based method that includes heading data
+                    footprint_file = self.footprint_map.create_footprint_map_from_csv(
+                        csv_path,
+                        output_folder,
+                        filename="Image_Footprints_Map.png"
+                    )
+                else:
+                    self.log_message("  └─ Using legacy GPS data for footprint analysis...")
+                    # Get navigation file path if available
+                    nav_file_path = None
+                    if hasattr(self, 'nav_path') and self.nav_path.get():
+                        nav_file_path = self.nav_path.get()
+                    
+                    # Call the legacy method with GPS data from metrics
+                    footprint_file = self.footprint_map.create_footprint_map(
+                        self.metrics.gps_data,
+                        output_folder,
+                        nav_file_path=nav_file_path,
+                        filename="Image_Footprints_Map.png"
+                    )
                 
                 if footprint_file and os.path.exists(footprint_file):
                     self.log_message(f"  └─ ✓ Footprint map created: {os.path.basename(footprint_file)}")
@@ -686,32 +775,21 @@ class ProcessingController:
                 
                 self.log_message("       ✓ Model loaded, analyzing images...")
                 
-                # Run analysis - pass empty list to let it scan the input folder
-                success, results = self.visibility_analyzer.analyze_images(
-                    [],  # Empty list means scan input folder
-                    output_folder,
-                    altitude_threshold=self.altitude_threshold
+                # Create the master CSV path
+                master_csv = os.path.join(output_folder, "Image_Metrics.csv")
+                if not os.path.exists(master_csv):
+                    self.log_message("  └─ ⚠ Image_Metrics.csv not found, visibility analysis requires existing CSV")
+                    return
+                
+                # Run analysis using the CSV method to update the master CSV
+                success = self.visibility_analyzer.analyze_images_from_csv(
+                    master_csv,    # Path to master CSV file
+                    output_folder  # Output folder for any additional files
                 )
                 
                 if success:
                     self.log_message("  └─ ✓ Visibility analysis completed successfully")
-                    
-                    # Log summary statistics if available
-                    if isinstance(results, dict):
-                        if 'total_images_found' in results:
-                            self.log_message(f"       Found {results['total_images_found']} total images")
-                        if 'images_analyzed' in results:
-                            self.log_message(f"       Analyzed {results['images_analyzed']} images")
-                        if 'by_category' in results:
-                            for category, count in results['by_category'].items():
-                                self.log_message(f"       {category}: {count} images")
-                                
-                        # Verify the CSV was created
-                        csv_path = os.path.join(output_folder, "Image_Visibility_Results.csv")
-                        if os.path.exists(csv_path):
-                            self.log_message(f"       Results saved to: Image_Visibility_Results.csv")
-                        else:
-                            self.log_message(f"       Warning: Image_Visibility_Results.csv not found")
+                    self.log_message("       Results updated in Image_Metrics.csv")
                 else:
                     self.log_message("  └─ ✗ Visibility analysis failed")
                     
@@ -755,17 +833,22 @@ class ProcessingController:
                 # in the output folder, so we don't need to pass them explicitly
                 # This maintains the dual functionality you want
                 
-                self.log_message(f"       Processing images from: {input_folder}")
+                self.log_message(f"       Processing images from master CSV...")
                 
-                # Call the highlight selector - it will handle both modes internally
-                highlight_paths = self.highlight_selector.select_highlights(
-                    input_folder,  # Input folder with images
-                    output_folder, # Output folder (where it will look for visibility results)
-                    count=10,      # Number of highlights to select
+                # Create the master CSV path
+                master_csv = os.path.join(output_folder, "Image_Metrics.csv")
+                if not os.path.exists(master_csv):
+                    self.log_message("  └─ ⚠ Image_Metrics.csv not found, highlight selection requires existing CSV")
+                    return
+                
+                # Call the CSV-based highlight selector to update the master CSV
+                highlight_paths = self.highlight_selector.select_highlights_from_csv(
+                    master_csv,       # Path to master CSV file
+                    output_folder,    # Output folder for highlight images
+                    count=10,         # Number of highlights to select
                     progress_callback=None,  # Skip progress for batch processing
                     altitude_threshold=self.altitude_threshold,
-                    min_altitude_threshold=2.0,
-                    visibility_results=None  # Let it find its own visibility results
+                    min_altitude_threshold=2.0
                 )
                 
                 if highlight_paths and len(highlight_paths) > 0:
@@ -872,8 +955,7 @@ class ProcessingController:
                     nav_file = row.get('Dive_Nav_file', '').strip()
                     lls_folder = row.get('LLS_Input', '').strip()
                     phins_nav_file = row.get('PhinsData_Bin_file', '').strip()
-                    nav_plot_file = row.get('NAV_STATE_file', '').strip()
-                    phins_ins_file = row.get('PHINS_INS_file', '').strip()
+                    phins_data_nav_file = row.get('PhinsData_Nav_file', '').strip()
                     
                     # Convert empty strings to None for cleaner logic
                     input_folder = input_folder if input_folder else None
@@ -881,8 +963,7 @@ class ProcessingController:
                     nav_file = nav_file if nav_file else None
                     lls_folder = lls_folder if lls_folder else None
                     phins_nav_file = phins_nav_file if phins_nav_file else None
-                    nav_plot_file = nav_plot_file if nav_plot_file else None
-                    phins_ins_file = phins_ins_file if phins_ins_file else None
+                    phins_data_nav_file = phins_data_nav_file if phins_data_nav_file else None
                     
                     # Validate required paths - only output is always required
                     if not output_folder:
@@ -891,13 +972,13 @@ class ProcessingController:
                         continue
                     
                     # Check if we have inputs for at least one processing module
-                    has_nav_module = nav_plot_file or phins_ins_file
+                    has_nav_module = phins_data_nav_file
                     has_image_module = input_folder
                     has_lls_module = lls_folder and phins_nav_file
                     
                     if not (has_nav_module or has_image_module or has_lls_module):
                         self.log_message(f"Job {job_num}: Skipping - no valid processing module inputs specified")
-                        self.log_message(f"  Navigation module needs: NAV_STATE_file or PHINS_INS_file")
+                        self.log_message(f"  Navigation module needs: PhinsData_Nav_file")
                         self.log_message(f"  Image module needs: Image_Input")
                         self.log_message(f"  LLS module needs: LLS_Input and PhinsData_Bin_file")
                         failed_jobs += 1
@@ -919,7 +1000,7 @@ class ProcessingController:
                     # Process this job
                     self.process_single_batch_job(
                         job_num, input_folder, output_folder, 
-                        nav_file, lls_folder, phins_nav_file, nav_plot_file, phins_ins_file
+                        nav_file, lls_folder, phins_nav_file, phins_data_nav_file
                     )
                     
                     self.log_message(f"Job {job_num} completed successfully")
@@ -950,20 +1031,17 @@ class ProcessingController:
             self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
     def process_single_batch_job(self, job_num, input_folder, output_folder, 
-                                nav_file, lls_folder, phins_nav_file, nav_plot_file, phins_ins_file=None):
+                                nav_file, lls_folder, phins_nav_file, phins_data_nav_file):
         """Process a single job from the batch CSV"""
         
         # Determine what processing is needed
-        has_nav_module = (nav_plot_file and os.path.exists(nav_plot_file)) or (phins_ins_file and os.path.exists(phins_ins_file))
+        has_nav_module = phins_data_nav_file and os.path.exists(phins_data_nav_file)
         has_lls = lls_folder and os.path.exists(lls_folder) and phins_nav_file and os.path.exists(phins_nav_file)
         has_imagery = input_folder and os.path.exists(input_folder)
         
         self.log_message(f"Job {job_num} processing:")
         if has_nav_module:
-            if nav_plot_file:
-                self.log_message(f"  - Navigation plot file: {nav_plot_file}")
-            if phins_ins_file:
-                self.log_message(f"  - PHINS INS file: {phins_ins_file}")
+            self.log_message(f"  - PHINS data file: {phins_data_nav_file}")
         if has_lls:
             self.log_message(f"  - LLS folder: {lls_folder}")
             self.log_message(f"  - Phins nav: {phins_nav_file}")
@@ -999,12 +1077,8 @@ class ProcessingController:
                 self.lls_path.set('')
                 self.phins_nav_path.set('')
             if has_nav_module:
-                if nav_plot_file:  # This is NAV_STATE_file from CSV
-                    self.nav_state_file_path.set(nav_plot_file)
-                if phins_ins_file:  # This is PHINS_INS_file from CSV
-                    self.nav_plot_file_path.set(phins_ins_file)
+                self.nav_plot_file_path.set(phins_data_nav_file)
             else:
-                self.nav_state_file_path.set('')
                 self.nav_plot_file_path.set('')
             
             self.output_path.set(output_folder)
@@ -1015,7 +1089,7 @@ class ProcessingController:
                 if has_nav_module and self.nav_processing_var.get():
                     self.log_message(f"Job {job_num}: Processing Navigation data...")
                     try:
-                        self.process_navigation_data(output_folder, nav_plot_file, phins_ins_file)
+                        self.process_navigation_data(output_folder, phins_data_nav_file)
                         self.log_message(f"Job {job_num}: ✓ Navigation processing completed")
                     except Exception as nav_error:
                         self.log_message(f"Job {job_num}: ✗ Navigation processing failed: {nav_error}")
@@ -1172,7 +1246,7 @@ class ProcessingController:
             
             # Validate Navigation processing inputs
             if nav_selected:
-                nav_file = self.nav_plot_file_path.get().strip()
+                nav_file = self.nav_state_file_path.get().strip()
                 
                 if not nav_file:
                     self.log_message("❌ Error: Navigation processing selected but no navigation file specified")
@@ -1274,6 +1348,7 @@ class ProcessingController:
                 return False
             
             # Check if any processing functions are selected
+            nav_selected = self.nav_processing_var.get()
             lls_selected = self.lls_processing_var.get()
             imagery_selected = any([
                 self.basic_metrics_var.get(),
@@ -1284,7 +1359,7 @@ class ProcessingController:
                 self.highlight_selector_var.get()
             ])
             
-            if not lls_selected and not imagery_selected:
+            if not nav_selected and not lls_selected and not imagery_selected:
                 self.log_message("❌ Error: No processing functions selected for batch processing")
                 return False
             
@@ -1299,7 +1374,7 @@ class ProcessingController:
                 
                 # Check required columns
                 required_columns = ['Output_folder']
-                optional_columns = ['Image_Input', 'Dive_Nav_file', 'LLS_Input', 'PhinsData_Bin_file', 'NAV_STATE_file', 'PHINS_INS_file']
+                optional_columns = ['Image_Input', 'Dive_Nav_file', 'LLS_Input', 'PhinsData_Bin_file']
                 
                 missing_required = [col for col in required_columns if col not in df.columns]
                 if missing_required:
@@ -1400,3 +1475,113 @@ class ProcessingController:
         except Exception as e:
             self.log_message(f"Error creating Image_Locations.csv: {e}")
             return None
+
+    def load_navigation_data_from_phins(self, phins_data_manager):
+        """Load navigation data from PhinsData manager for imagery processing"""
+        try:
+            if not hasattr(self, 'metrics') or not self.metrics:
+                return False
+                
+            # Get full navigation data from PhinsData manager (lat, lon, altitude)
+            nav_data = phins_data_manager.get_navigation_data()
+            if nav_data:
+                # Use the new full navigation data loading method
+                success = self.metrics.load_full_nav_data_from_phins(nav_data)
+                if success:
+                    self.log_message(f"       ✓ Loaded {len(nav_data)} navigation points from PhinsData for imagery processing")
+                    
+                    # Make nav data available to other components
+                    if hasattr(self, 'altitude_map'):
+                        self.altitude_map.nav_timestamps = nav_data
+                    if hasattr(self, 'footprint_map'):
+                        self.footprint_map.nav_timestamps = nav_data
+                    if hasattr(self, 'visibility_analyzer'):
+                        self.visibility_analyzer.nav_timestamps = nav_data
+                    if hasattr(self, 'highlight_selector'):
+                        self.highlight_selector.nav_timestamps = nav_data
+                        
+                    return True
+                else:
+                    self.log_message(f"       ⚠ Failed to load PhinsData navigation data into metrics")
+            else:
+                # Fallback to altitude-only data if full nav data not available
+                altitude_data = phins_data_manager.get_altitude_data()
+                if altitude_data:
+                    success = self.metrics.load_nav_data_from_phins(altitude_data)
+                    if success:
+                        self.log_message(f"       ✓ Loaded {len(altitude_data)} altitude points from PhinsData for imagery processing")
+                        return True
+                    else:
+                        self.log_message(f"       ⚠ Failed to load PhinsData altitude data into metrics")
+                else:
+                    self.log_message("       ⚠ No navigation or altitude data available from PhinsData")
+                    
+            return False
+                
+        except Exception as e:
+            self.log_message(f"       ⚠ Error loading navigation data from PhinsData: {e}")
+            return False
+
+    def _clear_phins_data_from_imagery_modules(self):
+        """Clear any PhinsData influence from imagery processing modules"""
+        try:
+            # Clear any PhinsData references from metrics module
+            if hasattr(self, 'metrics') and self.metrics:
+                # Clear any existing nav timestamps that might be from PhinsData
+                if hasattr(self.metrics, 'nav_timestamps'):
+                    self.metrics.nav_timestamps = []
+                if hasattr(self.metrics, 'nav_file_path'):
+                    self.metrics.nav_file_path = None
+            
+            # Clear PhinsData from footprint map
+            if hasattr(self, 'footprint_map') and self.footprint_map:
+                if hasattr(self.footprint_map, 'nav_data'):
+                    self.footprint_map.nav_data = None
+                if hasattr(self.footprint_map, 'nav_timestamps'):
+                    self.footprint_map.nav_timestamps = None
+            
+            # Clear PhinsData from other modules
+            for module_name in ['altitude_map', 'visibility_analyzer', 'highlight_selector']:
+                if hasattr(self, module_name):
+                    module = getattr(self, module_name)
+                    if hasattr(module, 'nav_timestamps'):
+                        module.nav_timestamps = None
+                    if hasattr(module, 'nav_data'):
+                        module.nav_data = None
+            
+            self.log_message("       ✓ Cleared any PhinsData references from imagery modules")
+            
+        except Exception as e:
+            self.log_message(f"       ⚠ Error clearing PhinsData: {e}")
+
+    def load_navigation_data_for_imagery_only(self, nav_file):
+        """Load navigation data specifically for imagery processing, ensuring no PhinsData contamination"""
+        try:
+            if not hasattr(self, 'metrics') or not self.metrics:
+                return False
+                
+            # Force reload of navigation data from text file
+            success = self.metrics.load_nav_data(nav_file)
+            if success:
+                self.log_message(f"       ✓ Navigation data loaded for imagery altitude and heading extraction")
+                
+                # ONLY share navigation data from text file (not PhinsData) with imagery modules
+                if hasattr(self.metrics, 'nav_timestamps'):
+                    # For footprint map, we don't use nav_timestamps, it loads its own nav_data
+                    # Just ensure it loads from the correct file
+                    if hasattr(self, 'footprint_map') and self.footprint_map:
+                        # Make sure footprint map uses the text file navigation data
+                        footprint_nav_success = self.footprint_map.load_nav_data(nav_file)
+                        if footprint_nav_success:
+                            self.log_message(f"       ✓ Footprint map loaded navigation data from text file")
+                        else:
+                            self.log_message(f"       ⚠ Footprint map failed to load navigation data")
+                        
+                return True
+            else:
+                self.log_message(f"       ⚠ Failed to load navigation data for imagery")
+                return False
+                
+        except Exception as e:
+            self.log_message(f"       ⚠ Navigation data error for imagery: {e}")
+            return False
