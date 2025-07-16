@@ -1,1 +1,8 @@
 v_a_pre-trained_models/visibility_model_20250402.h5
+
+# Large test data files
+tests/*.bin
+*.bin
+
+# Large model files
+*.h5
