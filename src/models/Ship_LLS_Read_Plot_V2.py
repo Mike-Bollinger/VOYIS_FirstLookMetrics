@@ -407,8 +407,8 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
 
     df1a = df1[df1['Depth_Approach'] == 1]
     df1b = df1[df1['Depth_Approach'] == 2]
-    axs[1].scatter(df1a['AUV_Altitude'], df1a['AverageIntensityAll'], label='High Intensity Area', color='darkorange', s=2)
-    axs[1].scatter(df1b['AUV_Altitude'], df1b['AverageIntensityAll'], label='Low Intensity Area', color='darkcyan', s=2)
+    axs[1].scatter(df1a['AUV_Altitude'], df1a['AverageIntensityAll'], label='High Intensity Area', color='darkorange', s=1)
+    axs[1].scatter(df1b['AUV_Altitude'], df1b['AverageIntensityAll'], label='Low Intensity Area', color='darkcyan', s=1)
     axs[1].set_xlabel('Depth (m)')
     axs[1].set_ylabel('Intensity')
     # axs[1].set_title('Depth vs Intensity')
@@ -425,8 +425,8 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     log_message("Generating position maps...")
     # Position plot
     plt.figure(figsize=(8.5, 5.5), facecolor='white')
-    plt.scatter(df0['AUV_Easting'], df0['AUV_Northing'], alpha=0.5, label='Bad Data Point', color='orange', s=1.5)
-    plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], alpha=0.5, label='AUV Position', color='green', s=1.5)
+    plt.scatter(df0['AUV_Easting'], df0['AUV_Northing'], alpha=0.5, label='Bad Data Point', color='orange', s=0.75)
+    plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], alpha=0.5, label='AUV Position', color='green', s=0.75)
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path')
     plt.xlabel('Easting (m)')
     plt.ylabel('Northing (m)')
@@ -439,7 +439,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     # Scatter plot of AUV position with depth color coding
     plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
-    scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['Depth'], cmap='viridis', zorder=2)
+    scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['Depth'], cmap='viridis', s=10, zorder=2)
     plt.colorbar(scatter, label='Depth (m)')
     plt.xlabel('Easting (m)')
     plt.ylabel('Northing (m)')
@@ -465,7 +465,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
     scatter = plt.scatter(dfnan['AUV_Easting'], dfnan['AUV_Northing'], c=dfnan['Deviation_Depth'], cmap='coolwarm',
-                          vmin=-3, vmax=3, zorder=2)
+                          vmin=-3, vmax=3, s=10, zorder=2)
     plt.colorbar(scatter, label='Depth Deviation (m)')
     plt.xlabel('Easting (m)')
     plt.ylabel('Northing (m)')
@@ -480,7 +480,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
     scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['AverageIntensityBtm'], cmap='viridis', 
-                          vmin=50, vmax=1500, zorder=2)
+                          vmin=50, vmax=1500, s=10, zorder=2)
     plt.colorbar(scatter, label='Intensity')
     plt.xlabel('Easting (m)')
     plt.ylabel('Northing (m)')

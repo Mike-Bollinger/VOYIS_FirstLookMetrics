@@ -171,8 +171,8 @@ class HighlightSelector:
                 
             log_message(f"Selecting {count} highlight images based on image metrics...", progress=10)
             
-            # Check if metrics already exist in CSV
-            log_message("Checking for existing metrics in Image_Locations.csv...", progress=12)
+            # Check if metrics already exist in Image_Metrics.csv
+            log_message("Checking for existing metrics in Image_Metrics.csv...", progress=12)
             existing_metrics_df = self.load_metrics_from_csv(output_folder, input_folder)
             
             # Set up visibility map
@@ -240,7 +240,7 @@ class HighlightSelector:
                 # Load altitude data from CSV if available
                 altitude_map = {}
                 try:
-                    csv_path = os.path.join(output_folder, "Image_Locations.csv")
+                    csv_path = os.path.join(output_folder, "Image_Metrics.csv")
                     if os.path.exists(csv_path):
                         df = self._pd.read_csv(csv_path)
                         if 'filename' in df.columns and 'altitude' in df.columns:
@@ -343,8 +343,8 @@ class HighlightSelector:
                 
                 for i, img_path in enumerate(all_image_paths):
                     try:
-                        # Log progress more frequently for large datasets
-                        if i % 10 == 0 or i < 50:  # Log first 50 and then every 10th
+                        # Log progress every 100 images for large datasets
+                        if i % 100 == 0 or i < 50:  # Log first 50 and then every 100th
                             elapsed = time.time() - start_time
                             rate = i / elapsed if elapsed > 0 and i > 0 else 0
                             eta = (len(all_image_paths) - i) / rate if rate > 0 else 0
@@ -1330,10 +1330,10 @@ class HighlightSelector:
 
     def export_metrics_to_csv(self, output_folder: str, metrics_df) -> bool:
         """
-        Export image metrics to the Image_Locations.csv file
+        Export image metrics to the Image_Metrics.csv file
         
         Args:
-            output_folder: Directory containing Image_Locations.csv
+            output_folder: Directory containing Image_Metrics.csv
             metrics_df: DataFrame with calculated metrics
             
         Returns:
@@ -1341,14 +1341,14 @@ class HighlightSelector:
         """
         try:
             self._ensure_imports()  # This will import pandas as self._pd
-            csv_path = os.path.join(output_folder, "Image_Locations.csv")
+            csv_path = os.path.join(output_folder, "Image_Metrics.csv")
             
             # Check if the CSV file exists
             if os.path.exists(csv_path):
                 # Load existing CSV
                 try:
                     locations_df = self._pd.read_csv(csv_path)
-                    print(f"Loaded existing Image_Locations.csv with {len(locations_df)} entries")
+                    print(f"Loaded existing Image_Metrics.csv with {len(locations_df)} entries")
                     
                     # Create a mapping of filenames to metrics
                     metrics_dict = {}
@@ -1385,7 +1385,7 @@ class HighlightSelector:
                     
                     # Save the updated CSV
                     locations_df.to_csv(csv_path, index=False)
-                    print(f"Saved updated Image_Locations.csv with metrics to {csv_path}")
+                    print(f"Saved updated Image_Metrics.csv with metrics to {csv_path}")
                     return True
                     
                 except Exception as e:
@@ -1394,9 +1394,9 @@ class HighlightSelector:
                     return False
             else:
                 # If no existing CSV, we should not create a metrics-only file
-                # The Image_Locations.csv should be created by the main processing pipeline first
+                # The Image_Metrics.csv should be created by the main processing pipeline first
                 # with GPS/EXIF data, and then we add metrics to it
-                print("Warning: Image_Locations.csv not found. Cannot add metrics without location data.")
+                print("Warning: Image_Metrics.csv not found. Cannot add metrics without location data.")
                 print("The location CSV should be created by the main processing pipeline first.")
                 return False
                 
@@ -1407,10 +1407,10 @@ class HighlightSelector:
 
     def load_metrics_from_csv(self, output_folder: str, input_folder: str):
         """
-        Load pre-calculated metrics from Image_Locations.csv if available
+        Load pre-calculated metrics from Image_Metrics.csv if available
         
         Args:
-            output_folder: Directory containing Image_Locations.csv
+            output_folder: Directory containing Image_Metrics.csv
             input_folder: Directory with input images to match with metrics
             
         Returns:
@@ -1418,10 +1418,10 @@ class HighlightSelector:
         """
         try:
             self._ensure_imports()  # This will import pandas as self._pd
-            csv_path = os.path.join(output_folder, "Image_Locations.csv")
+            csv_path = os.path.join(output_folder, "Image_Metrics.csv")
             
             if not os.path.exists(csv_path):
-                print("No existing Image_Locations.csv found")
+                print("No existing Image_Metrics.csv found")
                 return self._pd.DataFrame()
             
             # Load the CSV
@@ -1567,3 +1567,211 @@ class HighlightSelector:
                 'color_variance': 0.0,
                 'entropy': 0.0
             }
+    
+    def select_highlights_from_csv(self, csv_path: str, output_folder: str, 
+                                  count: int = 10, progress_callback: Optional[Callable] = None,
+                                  altitude_threshold: Optional[float] = None,
+                                  min_altitude_threshold: Optional[float] = 2.0) -> List[str]:
+        """
+        Select highlight images using the master CSV file
+        
+        Args:
+            csv_path: Path to the master Image_Metrics.csv file
+            output_folder: Directory to save highlight images
+            count: Number of highlight images to select
+            progress_callback: Optional callback for progress updates
+            altitude_threshold: Optional maximum altitude threshold to filter images
+            min_altitude_threshold: Optional minimum altitude threshold
+            
+        Returns:
+            List of paths to selected highlight images
+        """
+        try:
+            self._ensure_imports()
+            
+            # Check if CSV exists, if not try to create it
+            if not os.path.exists(csv_path):
+                print(f"CSV file not found: {csv_path}")
+                print("Attempting to create master CSV file...")
+                
+                # Try to create the CSV by finding input folder from CSV path
+                csv_dir = os.path.dirname(csv_path)
+                possible_input_folders = [
+                    os.path.join(csv_dir, '..', 'input'),
+                    os.path.join(csv_dir, 'input'),
+                    os.path.join(csv_dir, '..', 'test_images_auv_proc'),
+                    os.path.join(csv_dir, 'test_images_auv_proc'),
+                    csv_dir
+                ]
+                
+                input_folder = None
+                for folder in possible_input_folders:
+                    folder = os.path.normpath(folder)
+                    if os.path.exists(folder) and any(f.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff')) 
+                                                    for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))):
+                        input_folder = folder
+                        break
+                
+                if input_folder:
+                    from models.metrics import Metrics
+                    metrics = Metrics()
+                    csv_created = metrics.create_image_metrics_csv(input_folder, csv_dir)
+                    if not csv_created:
+                        print("Failed to create master CSV file")
+                        return []
+                else:
+                    print("Could not find input folder to create CSV")
+                    return []
+            
+            # Load the CSV file
+            if not self._pd:
+                import pandas as pd
+                self._pd = pd
+            
+            df = self._pd.read_csv(csv_path)
+            
+            # Check required columns
+            required_columns = ['filename', 'file_path']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                print(f"Missing required columns in CSV: {missing_columns}")
+                return []
+            
+            # Filter out rows with missing path information
+            df_filtered = df.dropna(subset=['file_path'])
+            
+            if len(df_filtered) == 0:
+                print("No valid image paths found in CSV")
+                return []
+            
+            # Apply altitude filtering if specified
+            if altitude_threshold is not None and 'altitude' in df_filtered.columns:
+                initial_count = len(df_filtered)
+                # Filter out rows with missing altitude values first
+                df_with_altitude = df_filtered.dropna(subset=['altitude'])
+                if len(df_with_altitude) > 0:
+                    df_filtered = df_with_altitude[df_with_altitude['altitude'] <= altitude_threshold]
+                    print(f"Filtered by altitude <= {altitude_threshold}m: {initial_count} -> {len(df_filtered)} images")
+                else:
+                    print(f"No altitude data available for filtering")
+            
+            if min_altitude_threshold is not None and 'altitude' in df_filtered.columns:
+                initial_count = len(df_filtered)
+                # Filter out rows with missing altitude values first
+                df_with_altitude = df_filtered.dropna(subset=['altitude'])
+                if len(df_with_altitude) > 0:
+                    df_filtered = df_with_altitude[df_with_altitude['altitude'] >= min_altitude_threshold]
+                    print(f"Filtered by altitude >= {min_altitude_threshold}m: {initial_count} -> {len(df_filtered)} images")
+                else:
+                    print(f"No altitude data available for filtering, using all images")
+                    # Keep all images if no altitude data
+            
+            # Convert DataFrame to image paths list
+            image_paths = df_filtered['file_path'].tolist()
+            
+            print(f"Loaded {len(image_paths)} image paths from CSV for highlight selection")
+            
+            # Prepare visibility results from CSV if available
+            visibility_results = None
+            if 'visibility' in df_filtered.columns and 'visibility_confidence' in df_filtered.columns:
+                visibility_results = {
+                    'analyzed_images': []
+                }
+                
+                for _, row in df_filtered.iterrows():
+                    if self._pd.notna(row.get('visibility')):
+                        result = {
+                            'image': row['filename'],
+                            'visibility': row['visibility'],
+                            'confidence': row.get('visibility_confidence', 0.0)
+                        }
+                        visibility_results['analyzed_images'].append(result)
+                
+                if visibility_results['analyzed_images']:
+                    print(f"Found visibility data for {len(visibility_results['analyzed_images'])} images in CSV")
+                else:
+                    visibility_results = None
+            
+            # Find input folder from first image path
+            if image_paths:
+                first_image_path = image_paths[0]
+                input_folder = os.path.dirname(first_image_path)
+                
+                # Try to find a common parent folder if paths are diverse
+                all_dirs = [os.path.dirname(path) for path in image_paths]
+                if len(set(all_dirs)) > 1:
+                    # Find common parent directory
+                    common_parent = os.path.commonpath(all_dirs)
+                    input_folder = common_parent
+                
+                print(f"Using input folder: {input_folder}")
+            else:
+                print("No image paths found")
+                return []
+            
+            # Use the existing select_highlights method
+            highlight_paths = self.select_highlights(
+                input_folder=input_folder,
+                output_folder=output_folder,
+                count=count,
+                progress_callback=progress_callback,
+                altitude_threshold=altitude_threshold,
+                min_altitude_threshold=min_altitude_threshold,
+                visibility_results=visibility_results
+            )
+            
+            if highlight_paths:
+                # Update the master CSV with highlight information
+                self._update_master_csv_with_highlights(csv_path, highlight_paths)
+                
+            return highlight_paths
+            
+        except Exception as e:
+            print(f"Error in select_highlights_from_csv: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return []
+
+    def _update_master_csv_with_highlights(self, csv_path: str, highlight_paths: List[str]) -> None:
+        """
+        Update the master CSV file with highlight selection results
+        
+        Args:
+            csv_path: Path to the master CSV file
+            highlight_paths: List of paths to selected highlight images
+        """
+        try:
+            # Ensure pandas is imported
+            self._ensure_imports()
+            
+            # Load the CSV file
+            df = self._pd.read_csv(csv_path)
+            
+            # Add highlight column if it doesn't exist
+            if 'is_highlight' not in df.columns:
+                df['is_highlight'] = False
+            
+            # Convert the column to boolean to avoid dtype warnings
+            df['is_highlight'] = df['is_highlight'].astype(bool)
+            
+            # Create a set of highlight filenames for quick lookup
+            highlight_filenames = set()
+            for path in highlight_paths:
+                filename = os.path.basename(path)
+                highlight_filenames.add(filename)
+            
+            # Update master CSV with highlight information
+            for idx, row in df.iterrows():
+                filename = row['filename']
+                if filename in highlight_filenames:
+                    df.at[idx, 'is_highlight'] = True
+                else:
+                    df.at[idx, 'is_highlight'] = False
+            
+            # Save updated CSV
+            df.to_csv(csv_path, index=False)
+            print(f"Updated master CSV with highlight information: {csv_path}")
+            
+        except Exception as e:
+            print(f"Error updating master CSV with highlight information: {e}")

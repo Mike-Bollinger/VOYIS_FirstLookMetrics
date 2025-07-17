@@ -4,12 +4,12 @@
   <img src="src/utils/NOAA_Voyis_Logo.png" alt="NOAA VOYIS Logo" width="200"/>
 </div>
 
-**Version:** 1.6.0  
-**Last Updated:** July 2025  
-**Author:** Mike Bollinger (Imagery, GUI, Navigation), Jeff Coogan (LLS), Noah Hunt (Navigation-R Version)
+**Version:** 1.5.0  
+**Last Updated:** June 2025  
+**Author:** Mike Bollinger (Imagery, GUI), Jeff Coogan (LLS)
 
 ## Overview
-The VOYIS First Look Metrics application is designed to calculate summary statistics about data collected by an AUV, including imagery analysis and navigation data processing. It analyzes processed stills and raw images, processes navigation data with advanced plotting capabilities, and provides comprehensive metrics about data coverage, overlap, and quality. The application features a user-friendly graphical interface for selecting input and output folders and displays real-time processing status.
+The VOYIS First Look Metrics application is designed to calculate summary statistics about a folder of images collected by an AUV. It analyzes processed stills and raw images, providing comprehensive metrics about image coverage, overlap, and quality. The application features a user-friendly graphical interface for selecting input and output folders and displays real-time processing status.
 
 ## Features
 
@@ -29,7 +29,14 @@ The VOYIS First Look Metrics application is designed to calculate summary statis
   - Overall overlap count showing total overlapping images for each footprint
   - Color-coded visualization maps for all overlap types (vertical, horizontal, overall)
 
-  - **Visibility Analysis**
+### Laser Line Scan Data Analysis
+- **LLS (Laser Line Scan) Data Processing**
+  - Integrated processing of laser line scan data with navigation
+  - Support for Phins navigation data integration
+  - Automated LLS data quality assessment and filtering
+  - Batch processing capabilities for multiple datasets
+  
+- **Visibility Analysis**
   - Machine learning-based classification of underwater image visibility
   - Categorization into zero, low, good, and great visibility classes
   - Random sampling of images below specified altitude threshold
@@ -42,49 +49,20 @@ The VOYIS First Look Metrics application is designed to calculate summary statis
   - Integration with visibility analysis results
   - Identification of representative imagery across survey area
   - HTML gallery of selected highlights with metadata
+  
+- **Batch Processing**
+  - Process multiple dive datasets simultaneously
+  - Configurable processing options for each dataset
+  - Progress tracking and detailed logging
+  - Error handling and recovery for robust processing
 
-### Laser Line Scan Data Analysis
-- **LLS (Laser Line Scan) Data Processing**
-  - Integrated processing of laser line scan data with navigation
-  - Support for Phins navigation data integration
-  - Automated LLS data quality assessment and filtering
-  - Batch processing capabilities for multiple datasets
-
-### Navigation Data Analysis
-- **Navigation Data Processing**
-  - Support for NAV_STATE.txt and PHINS INS.txt files
-  - Comprehensive navigation plotting and quality assessment
-  - Real-time heave data merging and time synchronization
-  - Advanced crab index analysis for vehicle stability assessment
-  
-- **Navigation Visualizations**
-  - Multi-panel navigation overview plots with mission timeline
-  - Bathymetry maps with enhanced depth visualization using exponential scaling
-  - Individual motion analysis (roll, pitch, heave) with time series plots
-  - Crab index mapping showing starboard/port drift patterns
-  - GPS track visualization with depth-colored trajectories
-  - Motion statistics and quality metrics analysis
-  
-- **Advanced Navigation Features**
-  - Automatic column mapping for flexible navigation file formats
-  - Mission time synchronization between navigation and PHINS data
-  - Statistical heave analysis when direct time merging fails
-  - Professional coordinate axis formatting (no scientific notation)
-  - High-resolution plot generation with customizable color schemes
-  
 ### User Interface
 - **Intuitive GUI**
   - Easy folder and file selection
   - Real-time progress tracking
   - Detailed processing logs
   - Configurable processing options
-
-- **Batch Processing**
-  - Process multiple dive datasets simultaneously
-  - Configurable processing options for each dataset
-  - Progress tracking and detailed logging
-  - Error handling and recovery for robust processing  
-
+  
 - **Highlight Panel Creator**
   - Creation of multi-image highlight panels for reports
   - Support for 2, 4, or 6 images in publication-ready format
@@ -92,25 +70,23 @@ The VOYIS First Look Metrics application is designed to calculate summary statis
   - Configurable 2-column layout optimized for portrait style reports
   - Drag-and-drop interface for easy image management
 
-## Recent Updates (v1.6.0)
-- **Comprehensive Navigation Processing**: Complete integration of advanced navigation data analysis with support for NAV_STATE.txt and PHINS INS.txt files
-- **Enhanced Navigation Plotting**: Multi-panel overview plots, bathymetry maps with exponential depth scaling, and individual motion analysis
-- **Crab Index Analysis**: Advanced vehicle stability assessment with starboard/port drift visualization
-- **Mission Time Synchronization**: Robust time-based merging of navigation and heave data with fallback strategies
-- **Professional Visualization**: High-quality plots with proper coordinate formatting, viridis colormap, and customizable point sizes
-- **Improved Column Mapping**: Flexible parsing of navigation files with automatic column detection and robust error handling
-- **Quality Assessment Integration**: Navigation quality metrics and statistics reporting for mission assessment
+## Recent Updates (v1.5.0)
+- **Enhanced LLS Processing**: Improved integration with navigation data and batch processing
+- **Corrected Visibility Categories**: Updated to use proper model categories (zero_visibility, low_visibility, good_visibility, great_visibility)
+- **Improved Batch Processing**: Better error handling and progress tracking
+- **Enhanced Highlight Selection**: Better image quality metrics and visibility integration
+- **UI Improvements**: LLS processing now enabled by default, better progress feedback
 
 ## System Requirements
 - Python 3.8 or higher
-- Required libraries: tkinter, PIL/Pillow, numpy, matplotlib, pandas, seaborn
+- Required libraries: tkinter, PIL/Pillow, numpy, matplotlib, pandas
 - Optional: 
   - geopandas for advanced mapping and GIS features
   - rtree for improved spatial query performance
   - TensorFlow for visibility analysis
   - shapely for advanced spatial operations
   - tkinterdnd2 for drag-and-drop functionality in highlight panel creator
-  - scipy for enhanced image metrics and statistical analysis
+  - scipy for enhanced image metrics
 
 ## Installation
 1. Clone the repository:
@@ -140,10 +116,8 @@ The VOYIS First Look Metrics application is designed to calculate summary statis
    python src/main.py
    ```
 2. Select input folders for imagery and/or LLS data
-3. Choose navigation files (NAV_STATE.txt and optional PHINS INS.txt)
-4. Choose output folder for results
-5. Select desired processing options:
-   - **Navigation Processing**: Analyze navigation data with comprehensive plotting
+3. Choose output folder for results
+4. Select desired processing options:
    - **LLS Processing**: Process laser line scan data
    - **Basic Metrics**: Calculate image statistics and metadata
    - **Location Maps**: Generate GPS-based visualizations
@@ -151,8 +125,8 @@ The VOYIS First Look Metrics application is designed to calculate summary statis
    - **Footprint Maps**: Calculate image coverage and overlaps
    - **Visibility Analysis**: ML-based visibility classification
    - **Highlight Selection**: Automatic selection of best images
-6. Click "Process" to start analysis
-7. Monitor progress and review results in the output folder
+5. Click "Process" to start analysis
+6. Monitor progress and review results in the output folder
 
 ## Output Files
 The application generates comprehensive outputs including:
@@ -185,20 +159,7 @@ The application generates comprehensive outputs including:
 - `Voyis_QuickLook_Summary.txt`: LLS processing summary and statistics
 - Various LLS data products and quality assessment files
 
-### Navigation Analysis
-- `Nav_Multi_Panel_Overview.png`: Comprehensive navigation overview with 6-panel layout
-- `Nav_Bathymetry_Map.png`: Depth-colored bathymetry map with exponential scaling
-- `Nav_Roll_Map.png`, `Nav_Pitch_Map.png`, `Nav_Heave_Map.png`: Individual motion maps
-- `Nav_Roll_Timeseries.png`, `Nav_Pitch_Timeseries.png`, `Nav_Heave_Timeseries.png`: Motion time series
-- `Nav_Crab_Index_Map.png`: Crab index visualization showing vehicle drift patterns
-- `Nav_Crab_Index_Timeseries.png`: Crab index time series analysis
-- `Nav_Crab_Index_Histogram.png`: Crab index distribution histogram
-- `Nav_Crab_Index_Analysis.png`: Enhanced crab index analysis with statistics
-- `Nav_Depth_Profile.png`: Depth profile time series with mission timeline
-- Navigation quality metrics and statistics (logged to console and processing log)
-
 ## Version History
-- **1.6.0** - Comprehensive navigation data processing and advanced plotting capabilities, crab index analysis, mission time synchronization
 - **1.5.0** - Enhanced LLS integration, corrected visibility categories, improved batch processing
 - **1.4.0** - Added highlight panel creator and highlight image selection tools
 - **1.3.0** - Added ML-based visibility analysis, improved workflow organization, and shapefile exports
@@ -208,11 +169,9 @@ The application generates comprehensive outputs including:
 
 ## Known Issues
 - Processing large datasets (>10,000 images) may be slow, especially for overlap calculations
-- Navigation processing requires specific file formats (NAV_STATE.txt, PHINS INS.txt)
 - Visibility analysis requires pre-trained model (not included in repository due to size)
 - Some advanced features require optional dependencies
 - Batch processing of very large datasets may require significant memory
-- PHINS heave data merging relies on mission time synchronization and may fall back to statistical methods if timestamps don't align
 
 ## Disclaimer
 

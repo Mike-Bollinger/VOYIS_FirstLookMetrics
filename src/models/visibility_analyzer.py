@@ -748,3 +748,145 @@ class VisibilityAnalyzer:
             
         except Exception as e:
             print(f"Error exporting visibility metrics: {str(e)}")
+    
+    def analyze_images_from_csv(self, csv_path: str, output_folder: str, 
+                              progress_callback: Optional[Callable] = None) -> bool:
+        """
+        Analyze images for visibility using the master CSV file
+        
+        Args:
+            csv_path: Path to the master Image_Metrics.csv file
+            output_folder: Directory to save analysis results
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            Boolean indicating success
+        """
+        try:
+            # Check if CSV exists, if not try to create it
+            if not os.path.exists(csv_path):
+                self.log_message(f"CSV file not found: {csv_path}")
+                self.log_message("Attempting to create master CSV file...")
+                
+                # Try to create the CSV by finding input folder from CSV path
+                csv_dir = os.path.dirname(csv_path)
+                possible_input_folders = [
+                    os.path.join(csv_dir, '..', 'input'),
+                    os.path.join(csv_dir, 'input'),
+                    os.path.join(csv_dir, '..', 'test_images_auv_proc'),
+                    os.path.join(csv_dir, 'test_images_auv_proc'),
+                    csv_dir
+                ]
+                
+                input_folder = None
+                for folder in possible_input_folders:
+                    folder = os.path.normpath(folder)
+                    if os.path.exists(folder) and any(f.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff')) 
+                                                    for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))):
+                        input_folder = folder
+                        break
+                
+                if input_folder:
+                    from models.metrics import Metrics
+                    metrics = Metrics()
+                    csv_created = metrics.create_image_metrics_csv(input_folder, csv_dir)
+                    if not csv_created:
+                        self.log_message("Failed to create master CSV file")
+                        return False
+                else:
+                    self.log_message("Could not find input folder to create CSV")
+                    return False
+            
+            # Load the CSV file
+            if not self._pd:
+                import pandas as pd
+                self._pd = pd
+            
+            df = self._pd.read_csv(csv_path)
+            
+            # Check required columns
+            required_columns = ['filename', 'file_path']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                self.log_message(f"Missing required columns in CSV: {missing_columns}")
+                return False
+            
+            # Filter out rows with missing path information
+            df_filtered = df.dropna(subset=['file_path'])
+            
+            if len(df_filtered) == 0:
+                self.log_message("No valid image paths found in CSV")
+                return False
+            
+            # Convert DataFrame to image paths list
+            image_paths = df_filtered['file_path'].tolist()
+            
+            self.log_message(f"Loaded {len(image_paths)} image paths from CSV for visibility analysis")
+            
+            # Use the existing analyze_images method
+            success, results = self.analyze_images(
+                image_paths=image_paths,
+                output_folder=output_folder,
+                progress_callback=progress_callback
+            )
+            
+            if success and results:
+                # Update the master CSV with visibility results
+                self.log_message("Updating master CSV with visibility results...")
+                self._update_master_csv_with_visibility(csv_path, results)
+                
+            return success
+            
+        except Exception as e:
+            self.log_message(f"Error in analyze_images_from_csv: {e}")
+            import traceback
+            self.log_message(traceback.format_exc())
+            return False
+    
+    def _update_master_csv_with_visibility(self, csv_path: str, results: Dict) -> None:
+        """
+        Update the master CSV file with visibility analysis results
+        
+        Args:
+            csv_path: Path to the master CSV file
+            results: Results dictionary from analyze_images method
+        """
+        try:
+            # Load the CSV file
+            df = self._pd.read_csv(csv_path)
+            
+            # Check if we have visibility results CSV
+            visibility_csv_path = results.get('csv_path')
+            if visibility_csv_path and os.path.exists(visibility_csv_path):
+                # Load visibility results
+                vis_df = self._pd.read_csv(visibility_csv_path)
+                
+                # Create a mapping from filename to visibility data
+                visibility_map = {}
+                for _, row in vis_df.iterrows():
+                    filename = row['image']
+                    visibility_map[filename] = {
+                        'visibility': row['visibility'],
+                        'visibility_confidence': row['confidence']
+                    }
+                
+                # Add visibility columns to master CSV if they don't exist
+                if 'visibility' not in df.columns:
+                    df['visibility'] = None
+                if 'visibility_confidence' not in df.columns:
+                    df['visibility_confidence'] = None
+                
+                # Update master CSV with visibility data
+                for idx, row in df.iterrows():
+                    filename = row['filename']
+                    if filename in visibility_map:
+                        df.at[idx, 'visibility'] = visibility_map[filename]['visibility']
+                        df.at[idx, 'visibility_confidence'] = visibility_map[filename]['visibility_confidence']
+                
+                # Save updated CSV
+                df.to_csv(csv_path, index=False)
+                self.log_message(f"Updated master CSV with visibility results: {csv_path}")
+            
+        except Exception as e:
+            self.log_message(f"Error updating master CSV with visibility results: {e}")

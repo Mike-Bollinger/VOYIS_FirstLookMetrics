@@ -6,3 +6,9 @@ tests/*.bin
 
 # Large model files
 *.h5
+
+# Test image files
+tests/*.jpg
+*.jpg
+tests/*.tif
+*.tif

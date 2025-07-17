@@ -102,7 +102,9 @@ class ProcessingController:
         try:
             self.analyze_images(input_folder, output_folder)
             
-            # Note: Completion message and progress update are now handled in analyze_images overall summary
+            self.log_message("\nAll selected processing tasks completed successfully.")
+            self.update_progress(100, "Processing complete!")
+            self.play_completion_sound()
             
         except Exception as e:
             self.log_message(f"\nError during processing: {str(e)}")
@@ -128,26 +130,15 @@ class ProcessingController:
                 self.highlight_selector_var.get()
             ])
             
-            # Load PhinsData for specific modules if needed (not for imagery)
-            phins_data_manager = None
-            # Log file paths for debugging (no longer using PhinsData manager)
-            if nav_selected or lls_selected:
-                phins_file = None
-                if hasattr(self, 'phins_nav_path') and self.phins_nav_path.get():
-                    file_path = self.phins_nav_path.get()
-                    if file_path and os.path.exists(file_path):
-                        phins_file = file_path
-                        self.log_message(f"       Phins nav file: {phins_file}")
+            # PhinsData manager has been deprecated and removed
+            # All modules now use CSV-based processing for consistency
             
             # Process Navigation data first if selected
             if nav_selected:
                 self.log_message("Processing Navigation data...")
-                try:
-                    self.process_navigation_data(output_folder)
-                    self.log_message("✓ Navigation processing completed")
-                except Exception as nav_error:
-                    self.log_message(f"✗ Navigation processing failed: {nav_error}")
-                    self.log_message(f"Traceback: {traceback.format_exc()}")
+                self.log_message("⚠ Navigation plotting functionality has been deprecated and removed")
+                self.log_message("   Please use the individual navigation analysis tools instead")
+                self.log_message("✓ Navigation processing skipped (deprecated)")
             
             # Process LLS data if selected
             if lls_selected:
@@ -162,10 +153,7 @@ class ProcessingController:
             # Process imagery data if selected
             if imagery_selected:
                 self.log_message("Processing Imagery data...")
-                self.log_message("       ⚠ Note: Imagery processing uses ONLY navigation text file data, not PhinsData")
-                
-                # Ensure we clear any residual PhinsData influence from previous nav/lls processing
-                self._clear_phins_data_from_imagery_modules()
+                self.log_message("       ⚠ Note: All modules now use CSV-based processing for consistency")
                 
                 # Load navigation data from dive nav text file ONLY for imagery
                 nav_file = None
@@ -212,13 +200,8 @@ class ProcessingController:
                     
                     self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
                     
-                    # Always create Image_Locations.csv if we have GPS data
-                    if self.metrics.gps_data:
-                        try:
-                            self.create_location_csv(output_folder)
-                            self.log_message("✓ Created Image_Locations.csv with GPS and EXIF data")
-                        except Exception as csv_error:
-                            self.log_message(f"⚠ Error creating Image_Locations.csv: {csv_error}")
+                    # Image_Metrics.csv already contains all GPS and EXIF data
+                    self.log_message("✓ Image_Metrics.csv contains all required GPS and EXIF data")
                     
                 except Exception as metadata_error:
                     self.log_message(f"✗ Error extracting metadata: {metadata_error}")
@@ -331,13 +314,11 @@ class ProcessingController:
                         self.log_message(f"⚠ Imagery processing completed with {total_stages - completed_stages} errors")
             
             # Final overall summary
-            total_processes = (1 if nav_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
+            total_processes = (1 if lls_selected else 0) + (1 if imagery_selected else 0)
             self.log_message(f"\n{'='*60}")
             self.log_message(f"OVERALL PROCESSING SUMMARY")
             self.log_message(f"{'='*60}")
             
-            if nav_selected:
-                self.log_message("Navigation Processing: Completed")
             if lls_selected:
                 self.log_message("LLS Processing: Completed")
             if imagery_selected:
@@ -363,69 +344,33 @@ class ProcessingController:
                 self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
     def process_navigation_data(self, output_folder):
-        """Process navigation data for plotting using text files (NAV_STATE.txt and PHINS INS.txt)"""
+        """Process navigation data for plotting using PhinsData manager or file"""
         self.log_message("STAGE 1: Processing Navigation data for plotting...")
         
-        try:
-            from src.models.nav_plotter import NavPlotter
-            
-            # Create NavPlotter instance with logging
-            nav_plotter = NavPlotter(log_callback=self.log_message)
-            
-            # Get navigation file paths - we use NAV_STATE.txt and PHINS INS.txt
-            nav_file = self.nav_state_file_path.get()  # NAV_STATE.txt
-            phins_file = self.nav_plot_file_path.get()  # PHINS INS.txt
-            
-            # Validate navigation file
-            if not nav_file or not os.path.exists(nav_file):
-                self.log_message("Warning: Navigation file (NAV_STATE.txt) not specified or doesn't exist. Skipping navigation processing.")
-                return
-            
-            self.log_message(f"       Navigation file: {os.path.basename(nav_file)}")
-            
-            # PHINS file is optional for heave data
-            if phins_file and os.path.exists(phins_file):
-                self.log_message(f"       PHINS INS file: {os.path.basename(phins_file)} (for heave data)")
-            else:
-                self.log_message("       No PHINS INS file specified - will use estimated heave from depth changes")
-                phins_file = None
-            
-            # Process navigation data using text files
-            success = nav_plotter.process_navigation_file(
-                nav_file,           # NAV_STATE.txt
-                output_folder,      # Output directory
-                "Navigation_Analysis",  # Dive name
-                phins_file_path=phins_file  # PHINS INS.txt (optional)
-            )
-            
-            if success:
-                self.log_message("✓ Navigation processing completed")
-            else:
-                self.log_message("✗ Error during navigation data processing")
-                
-        except ImportError as e:
-            self.log_message(f"Error: Could not import navigation plotting modules: {e}")
-        except Exception as e:
-            self.log_message(f"Error during navigation processing: {str(e)}")
-            raise
+        # Navigation plotting functionality has been deprecated and removed
+        self.log_message("⚠ Navigation plotting functionality has been deprecated and removed")
+        self.log_message("   Please use the individual navigation analysis tools instead")
+        self.log_message("✓ Navigation processing skipped (deprecated)")
+        return
 
     def process_lls_data(self, output_folder):
-        """Process LLS data using text files"""
+        """Process LLS data using navigation file"""
         self.log_message("STAGE 2: Processing LLS (Laser Line Scan) data...")
         
         lls_folder = self.lls_path.get()
-        phins_nav_file = self.phins_nav_path.get()
         
-        self.log_message(f"       LLS folder: {lls_folder}")
-        self.log_message(f"       Phins nav file: {phins_nav_file}")
+        # Use navigation file path for LLS processing
+        nav_file = self.nav_path.get()
         
         if not lls_folder or not os.path.exists(lls_folder):
             self.log_message("Warning: LLS folder not specified or doesn't exist. Skipping LLS processing.")
             return
         
-        if not phins_nav_file or not os.path.exists(phins_nav_file):
-            self.log_message("Warning: Phins navigation file not specified or doesn't exist. Skipping LLS processing.")
+        if not nav_file or not os.path.exists(nav_file):
+            self.log_message("Warning: Navigation file not specified or doesn't exist. Skipping LLS processing.")
             return
+        
+        self.log_message(f"       Using navigation file: {os.path.basename(nav_file)}")
         
         try:
             from src.models.lls_processor import LLSProcessor
@@ -441,7 +386,7 @@ class ProcessingController:
                 )
             )
             
-            success = lls_processor.process_lls_data(lls_folder, phins_nav_file, output_folder)
+            success = lls_processor.process_lls_data(lls_folder, nav_file, output_folder)
             
             if success:
                 self.log_message("✓ LLS data processing completed successfully")
@@ -484,8 +429,7 @@ class ProcessingController:
                 'nav_path': self.nav_path.get(),
                 'lls_path': self.lls_path.get(),
                 'phins_nav_path': self.phins_nav_path.get(),
-                'nav_plot_file_path': self.nav_plot_file_path.get(),
-                'nav_state_file_path': self.nav_state_file_path.get()
+                'nav_plot_file_path': self.nav_plot_file_path.get()
             }
         except Exception as e:
             self.log_message(f"Error saving current paths: {e}")
@@ -501,7 +445,6 @@ class ProcessingController:
                 self.lls_path.set(saved_paths.get('lls_path', ''))
                 self.phins_nav_path.set(saved_paths.get('phins_nav_path', ''))
                 self.nav_plot_file_path.set(saved_paths.get('nav_plot_file_path', ''))
-                self.nav_state_file_path.set(saved_paths.get('nav_state_file_path', ''))
         except Exception as e:
             self.log_message(f"Error restoring paths: {e}")
     
@@ -1089,7 +1032,7 @@ class ProcessingController:
                 if has_nav_module and self.nav_processing_var.get():
                     self.log_message(f"Job {job_num}: Processing Navigation data...")
                     try:
-                        self.process_navigation_data(output_folder, phins_data_nav_file)
+                        self.process_navigation_data(output_folder, None)  # phins_data_nav_file is deprecated
                         self.log_message(f"Job {job_num}: ✓ Navigation processing completed")
                     except Exception as nav_error:
                         self.log_message(f"Job {job_num}: ✗ Navigation processing failed: {nav_error}")
@@ -1246,7 +1189,7 @@ class ProcessingController:
             
             # Validate Navigation processing inputs
             if nav_selected:
-                nav_file = self.nav_state_file_path.get().strip()
+                nav_file = self.nav_plot_file_path.get().strip()
                 
                 if not nav_file:
                     self.log_message("❌ Error: Navigation processing selected but no navigation file specified")
@@ -1451,109 +1394,6 @@ class ProcessingController:
             self.log_message(f"⚠️ Warning: Could not validate visibility model: {e}")
             return True  # Don't fail validation for visibility model issues
     
-    def create_location_csv(self, output_folder):
-        """Create Image_Locations.csv file with GPS and EXIF data"""
-        try:
-            csv_path = os.path.join(output_folder, "Image_Locations.csv")
-            import pandas as pd
-            df = pd.DataFrame(self.metrics.gps_data)
-            
-            # Define preferred column order
-            columns = ["filename", "DateTime", "latitude", "longitude", "altitude",
-                      "SubjectDistance", "ExposureTime", "FNumber", "FocalLength",
-                      "width", "height"]
-            
-            # Get available columns in preferred order, then add any others
-            available_cols = [col for col in columns if col in df.columns]
-            other_cols = [col for col in df.columns if col not in columns]
-            
-            df = df[available_cols + other_cols]
-            df.to_csv(csv_path, index=False)
-            
-            return csv_path
-            
-        except Exception as e:
-            self.log_message(f"Error creating Image_Locations.csv: {e}")
-            return None
-
-    def load_navigation_data_from_phins(self, phins_data_manager):
-        """Load navigation data from PhinsData manager for imagery processing"""
-        try:
-            if not hasattr(self, 'metrics') or not self.metrics:
-                return False
-                
-            # Get full navigation data from PhinsData manager (lat, lon, altitude)
-            nav_data = phins_data_manager.get_navigation_data()
-            if nav_data:
-                # Use the new full navigation data loading method
-                success = self.metrics.load_full_nav_data_from_phins(nav_data)
-                if success:
-                    self.log_message(f"       ✓ Loaded {len(nav_data)} navigation points from PhinsData for imagery processing")
-                    
-                    # Make nav data available to other components
-                    if hasattr(self, 'altitude_map'):
-                        self.altitude_map.nav_timestamps = nav_data
-                    if hasattr(self, 'footprint_map'):
-                        self.footprint_map.nav_timestamps = nav_data
-                    if hasattr(self, 'visibility_analyzer'):
-                        self.visibility_analyzer.nav_timestamps = nav_data
-                    if hasattr(self, 'highlight_selector'):
-                        self.highlight_selector.nav_timestamps = nav_data
-                        
-                    return True
-                else:
-                    self.log_message(f"       ⚠ Failed to load PhinsData navigation data into metrics")
-            else:
-                # Fallback to altitude-only data if full nav data not available
-                altitude_data = phins_data_manager.get_altitude_data()
-                if altitude_data:
-                    success = self.metrics.load_nav_data_from_phins(altitude_data)
-                    if success:
-                        self.log_message(f"       ✓ Loaded {len(altitude_data)} altitude points from PhinsData for imagery processing")
-                        return True
-                    else:
-                        self.log_message(f"       ⚠ Failed to load PhinsData altitude data into metrics")
-                else:
-                    self.log_message("       ⚠ No navigation or altitude data available from PhinsData")
-                    
-            return False
-                
-        except Exception as e:
-            self.log_message(f"       ⚠ Error loading navigation data from PhinsData: {e}")
-            return False
-
-    def _clear_phins_data_from_imagery_modules(self):
-        """Clear any PhinsData influence from imagery processing modules"""
-        try:
-            # Clear any PhinsData references from metrics module
-            if hasattr(self, 'metrics') and self.metrics:
-                # Clear any existing nav timestamps that might be from PhinsData
-                if hasattr(self.metrics, 'nav_timestamps'):
-                    self.metrics.nav_timestamps = []
-                if hasattr(self.metrics, 'nav_file_path'):
-                    self.metrics.nav_file_path = None
-            
-            # Clear PhinsData from footprint map
-            if hasattr(self, 'footprint_map') and self.footprint_map:
-                if hasattr(self.footprint_map, 'nav_data'):
-                    self.footprint_map.nav_data = None
-                if hasattr(self.footprint_map, 'nav_timestamps'):
-                    self.footprint_map.nav_timestamps = None
-            
-            # Clear PhinsData from other modules
-            for module_name in ['altitude_map', 'visibility_analyzer', 'highlight_selector']:
-                if hasattr(self, module_name):
-                    module = getattr(self, module_name)
-                    if hasattr(module, 'nav_timestamps'):
-                        module.nav_timestamps = None
-                    if hasattr(module, 'nav_data'):
-                        module.nav_data = None
-            
-            self.log_message("       ✓ Cleared any PhinsData references from imagery modules")
-            
-        except Exception as e:
-            self.log_message(f"       ⚠ Error clearing PhinsData: {e}")
-
     def load_navigation_data_for_imagery_only(self, nav_file):
         """Load navigation data specifically for imagery processing, ensuring no PhinsData contamination"""
         try:

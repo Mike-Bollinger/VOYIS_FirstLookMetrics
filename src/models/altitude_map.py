@@ -471,7 +471,7 @@ class AltitudeMap:
             return None
     
     def export_to_gis_formats(self, gps_data: List[Dict], output_path: str, 
-                             csv_filename: str = "Image_Locations.csv",
+                             csv_filename: str = "Image_Metrics.csv",
                              shapefile_filename: str = "Image_Locations.shp") -> Dict[str, str]:
         """Export GPS data to CSV and Shapefile formats"""
         result_files = {}

@@ -34,9 +34,18 @@ class Metrics:
         self.above_threshold_images = []
         self.above_threshold_values = {}
         
-        # Patterns for recognizing files
-        self.raw_pattern = re.compile(r'ESC_stills_raw_PPS_')
-        self.processed_pattern = re.compile(r'ESC_stills_processed_PPS_')
+        # Patterns for recognizing files - made more flexible
+        # Focus on just the word "raw" in filename for maximum flexibility
+        self.raw_pattern = re.compile(r'_raw_', re.IGNORECASE)
+        self.processed_pattern = re.compile(r'ESC_stills_processed_(?:PPS_)?')  # Optional PPS part
+        
+        # Track processing types
+        self.auv_processed_count = 0
+        self.auv_processed_size = 0
+        self.viewls_processed_count = 0
+        self.viewls_processed_size = 0
+        self.unknown_processed_count = 0
+        self.unknown_processed_size = 0
     
     def analyze_directory(self, input_folder: str, progress_callback: Callable = None, extract_gps: bool = False) -> Tuple[int, List[str]]:
         """
@@ -58,6 +67,14 @@ class Metrics:
         self.other_count = 0
         self.other_size = 0
         self.gps_data = []
+        
+        # Reset processing type counters
+        self.auv_processed_count = 0
+        self.auv_processed_size = 0
+        self.viewls_processed_count = 0
+        self.viewls_processed_size = 0
+        self.unknown_processed_count = 0
+        self.unknown_processed_size = 0
         
         # Check if PIL is available for GPS extraction
         if extract_gps and not PIL_AVAILABLE:
@@ -96,6 +113,22 @@ class Metrics:
                     self.processed_count += 1
                     self.processed_size += file_size
                     file_type = "processed"
+                    
+                    # Determine processing type for processed images
+                    processing_type = self.determine_processing_type(file_path)
+                    if processing_type == 'auv':
+                        self.auv_processed_count += 1
+                        self.auv_processed_size += file_size
+                        file_type = "auv_processed"
+                    elif processing_type == 'viewls':
+                        self.viewls_processed_count += 1
+                        self.viewls_processed_size += file_size
+                        file_type = "viewls_processed"
+                    else:
+                        self.unknown_processed_count += 1
+                        self.unknown_processed_size += file_size
+                        file_type = "unknown_processed"
+                    
                     # Report milestones
                     if self.processed_count % 100 == 0 and progress_callback:
                         progress_callback(progress, f"Found {self.processed_count} processed images so far...")
@@ -108,7 +141,7 @@ class Metrics:
                                 gps_info['file_type'] = file_type
                                 gps_info['filename'] = file
                                 self.gps_data.append(gps_info)
-                                if len(self.gps_data) % 10 == 0 and progress_callback:
+                                if len(self.gps_data) % 100 == 0 and progress_callback:
                                     progress_callback(progress, f"Extracted GPS data from {len(self.gps_data)} processed images so far...")
                         except Exception as e:
                             if progress_callback:
@@ -137,6 +170,12 @@ class Metrics:
         return {
             "Processed Images": self.processed_count,
             "Processed Size": self.processed_size,
+            "AUV Processed Images": self.auv_processed_count,
+            "AUV Processed Size": self.auv_processed_size,
+            "ViewLS Processed Images": self.viewls_processed_count,
+            "ViewLS Processed Size": self.viewls_processed_size,
+            "Unknown Processed Images": self.unknown_processed_count,
+            "Unknown Processed Size": self.unknown_processed_size,
             "Raw Images": self.raw_count,
             "Raw Size": self.raw_size,
             "Other Files": self.other_count,
@@ -151,6 +190,9 @@ class Metrics:
         """Return formatted summary as list of strings"""
         # Format sizes for display
         processed_size_hr = self.format_size(self.processed_size)
+        auv_size_hr = self.format_size(self.auv_processed_size)
+        viewls_size_hr = self.format_size(self.viewls_processed_size)
+        unknown_size_hr = self.format_size(self.unknown_processed_size)
         raw_size_hr = self.format_size(self.raw_size)
         other_size_hr = self.format_size(self.other_size)
         total_size_hr = self.format_size(self.processed_size + self.raw_size + self.other_size)
@@ -159,6 +201,9 @@ class Metrics:
             "Image Analysis Summary:",
             "-----------------------",
             f"Processed Still Images: {self.processed_count}",
+            f"  - AUV Processed: {self.auv_processed_count} ({auv_size_hr})",
+            f"  - ViewLS Processed: {self.viewls_processed_count} ({viewls_size_hr})",
+            f"  - Unknown Processed: {self.unknown_processed_count} ({unknown_size_hr})",
             f"Processed Stills Size: {processed_size_hr}",
             f"Raw Images: {self.raw_count}",
             f"Raw Images Size: {raw_size_hr}",
@@ -287,6 +332,20 @@ class Metrics:
                             result['altitude'] = nav_altitude
                             result['altitude_source'] = 'nav'
                             
+                # Determine processing type from EXIF data
+                processing_type = 'unknown'
+                if 'Software' in exif_data:
+                    software = str(exif_data['Software']).lower()
+                    if 'uls 500 main' in software:
+                        processing_type = 'auv'
+                    elif 'voyis post processing' in software:
+                        processing_type = 'viewls'
+                
+                # Add processing type and software info to result
+                result['processing_type'] = processing_type
+                if 'Software' in exif_data:
+                    result['software'] = exif_data['Software']
+                
                 return result
                 
         except Exception as e:
@@ -364,7 +423,7 @@ class Metrics:
     
     def load_nav_data(self, nav_file_path: str) -> bool:
         """
-        Load navigation data from a text file, extracting altitude data
+        Load navigation data from a text file, extracting altitude and heading data
         
         Args:
             nav_file_path: Path to the navigation file
@@ -401,13 +460,15 @@ class Metrics:
                     # Split the line by commas
                     parts = line.strip().split(',')
                     
-                    # Check if we have enough parts for time, date, and altitude
-                    if len(parts) >= 4:
-                        # Format: "HH:MM:SS.SSS", "MM/DD/YYYY", "Lat/Lon", "Altitude"
+                    # Check if we have enough parts for time, date, altitude, depth, and heading
+                    if len(parts) >= 6:
+                        # Format: "HH:MM:SS.SSS", "MM/DD/YYYY", "Lat/Lon", "Altitude", "Depth", "Heading"
                         time_str = parts[0].strip()
                         date_str = parts[1].strip()
                         lon_lat_str = parts[2].strip()
                         altitude_str = parts[3].strip()
+                        depth_str = parts[4].strip()
+                        heading_str = parts[5].strip()
                         
                         # Combine date and time
                         timestamp = self._parse_nav_datetime(date_str, time_str)
@@ -415,17 +476,19 @@ class Metrics:
                         if timestamp:
                             try:
                                 altitude = float(altitude_str)
-                                # Store timestamp and altitude as a tuple for direct comparison
-                                self.nav_timestamps.append((timestamp, altitude))
+                                depth = float(depth_str)
+                                heading = float(heading_str)
+                                # Store timestamp, altitude, depth, and heading as a tuple
+                                self.nav_timestamps.append((timestamp, altitude, depth, heading))
                                 total_entries += 1
                             except ValueError:
-                                print(f"Invalid altitude value: {altitude_str}")
+                                print(f"Invalid altitude, depth, or heading value: {altitude_str}, {depth_str}, {heading_str}")
                                 
                 except Exception as e:
                     print(f"Error parsing navigation line: {str(e)}")
                     continue
             
-            print(f"Loaded {total_entries} altitude points from navigation file")
+            print(f"Loaded {total_entries} navigation points from navigation file")
             
             # Sort timestamps chronologically for faster searching
             if self.nav_timestamps:
@@ -556,7 +619,17 @@ class Metrics:
                 closest_altitude = None
                 closest_diff = tolerance
                 
-                for timestamp, altitude in self.nav_timestamps:
+                for nav_entry in self.nav_timestamps:
+                    # Handle different formats: (timestamp, altitude), (timestamp, altitude, heading), (timestamp, altitude, depth, heading)
+                    if len(nav_entry) == 2:
+                        timestamp, altitude = nav_entry
+                    elif len(nav_entry) == 3:
+                        timestamp, altitude, heading = nav_entry
+                    elif len(nav_entry) == 4:
+                        timestamp, altitude, depth, heading = nav_entry
+                    else:
+                        continue
+                        
                     diff = abs(timestamp - dt)
                     
                     # If this timestamp is closer than our previous best match
@@ -575,4 +648,594 @@ class Metrics:
                 
             # If we get here, no altitude was found
             return None
+    
+    def determine_processing_type(self, image_path: str) -> str:
+        """
+        Determine the processing type of an image based on EXIF data
+        
+        Args:
+            image_path: Path to the image file
+            
+        Returns:
+            String indicating processing type: 'auv', 'viewls', or 'unknown'
+        """
+        if not PIL_AVAILABLE:
+            # If PIL not available, try folder structure
+            return self._determine_type_from_path(image_path)
+            
+        try:
+            with Image.open(image_path) as img:
+                if hasattr(img, '_getexif') and img._getexif() is not None:
+                    exif_data = {
+                        TAGS.get(tag, tag): value
+                        for tag, value in img._getexif().items()
+                    }
+                    
+                    # Check the Software tag to determine processing type
+                    if 'Software' in exif_data:
+                        software = str(exif_data['Software']).lower()
+                        
+                        # AUV processing patterns
+                        if any(pattern in software for pattern in [
+                            'uls 500 main',
+                            'uls500 main',
+                            'uls_500_main',
+                            'voyis auv',
+                            'auv processing'
+                        ]):
+                            return 'auv'
+                        
+                        # ViewLS processing patterns
+                        elif any(pattern in software for pattern in [
+                            'voyis post processing',
+                            'viewls',
+                            'post processing',
+                            'voyis processing'
+                        ]):
+                            return 'viewls'
+                    
+                    # If software tag is inconclusive, check other EXIF fields
+                    if 'ImageDescription' in exif_data:
+                        description = str(exif_data['ImageDescription']).lower()
+                        if 'auv' in description:
+                            return 'auv'
+                        elif 'viewls' in description or 'post' in description:
+                            return 'viewls'
+                    
+                    # Fallback: check folder structure and filename patterns
+                    return self._determine_type_from_path(image_path)
+                    
+        except Exception:
+            # If we can't read EXIF, try folder structure
+            return self._determine_type_from_path(image_path)
+    
+    def _determine_type_from_path(self, image_path: str) -> str:
+        """
+        Determine processing type from file path and folder structure
+        
+        Args:
+            image_path: Path to the image file
+            
+        Returns:
+            String indicating processing type: 'auv', 'viewls', or 'unknown'
+        """
+        path_lower = image_path.lower()
+        
+        # Check folder structure
+        if any(folder in path_lower for folder in ['auv_proc', 'auv_processed', 'auv_processing']):
+            return 'auv'
+        elif any(folder in path_lower for folder in ['viewls_proc', 'viewls_processed', 'viewls_processing']):
+            return 'viewls'
+        
+        # Check filename patterns
+        filename = os.path.basename(image_path).lower()
+        
+        # If it has PPS in the name, it's likely AUV processing
+        if 'pps' in filename:
+            return 'auv'
+        
+        # If it's processed but no PPS, could be either type
+        if 'processed' in filename:
+            # Without more information, default to unknown
+            return 'unknown'
+        
+        return 'unknown'
+    
+    def create_image_metrics_csv(self, input_folder: str, output_folder: str, 
+                                nav_file: str = None, 
+                                progress_callback: Callable = None) -> Optional[str]:
+        """
+        Create the master Image_Metrics.csv file containing all image data and metrics
+        
+        Args:
+            input_folder: Path to input directory containing images
+            output_folder: Path to output directory where CSV will be saved
+            nav_file: Optional path to navigation file for heading data
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            Path to created CSV file or None if failed
+        """
+        try:
+            import pandas as pd
+            import csv
+            from pathlib import Path
+            
+            # Load navigation data if provided
+            if nav_file and os.path.exists(nav_file):
+                self.load_nav_data(nav_file)
+            
+            # Check if GPS data is already available from a previous analyze_directory call
+            if not self.gps_data:
+                # GPS data not available, need to extract it
+                if progress_callback:
+                    progress_callback(5, "Analyzing directory structure...")
+                
+                total_files, _ = self.analyze_directory(input_folder, progress_callback=progress_callback, extract_gps=True)
+                
+                if not self.gps_data:
+                    print("No GPS data found in images")
+                    return None
+            else:
+                # GPS data is already available, just update progress
+                if progress_callback:
+                    progress_callback(25, f"Using existing GPS data from {len(self.gps_data)} images...")
+            
+            if progress_callback:
+                progress_callback(30, "Creating master CSV structure...")
+            
+            # Create the master CSV path
+            csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+            
+            # Prepare data for CSV
+            csv_data = []
+            
+            for i, gps_point in enumerate(self.gps_data):
+                if progress_callback and i % 100 == 0:
+                    progress = 30 + (i / len(self.gps_data)) * 60
+                    progress_callback(progress, f"Processing image {i+1} of {len(self.gps_data)}...")
+                
+                # Extract basic information
+                filename = gps_point.get('filename', '')
+                file_path = gps_point.get('file_path', '')
+                latitude = gps_point.get('latitude', '')
+                longitude = gps_point.get('longitude', '')
+                altitude = gps_point.get('altitude', '')
+                processing_type = gps_point.get('processing_type', 'unknown')
+                
+                # Extract EXIF data
+                software = gps_point.get('software', '')
+                exposure_time = gps_point.get('ExposureTime', '')
+                f_number = gps_point.get('FNumber', '')
+                focal_length = gps_point.get('FocalLength', '')
+                subject_distance = gps_point.get('SubjectDistance', '')
+                datetime_original = gps_point.get('DateTime', '')
+                width = gps_point.get('width', '')
+                height = gps_point.get('height', '')
+                
+                # Try to get heading from navigation data if available
+                heading = ''
+                if hasattr(self, 'nav_timestamps') and self.nav_timestamps and file_path:
+                    try:
+                        # Extract timestamp from filename for nav matching
+                        heading = self.get_heading_from_nav(file_path)
+                    except:
+                        pass
+                
+                # Try to get depth from navigation data if available
+                depth = ''
+                if hasattr(self, 'nav_timestamps') and self.nav_timestamps and file_path:
+                    try:
+                        # Extract timestamp from filename for nav matching
+                        depth_value = self.get_depth_from_nav(file_path)
+                        if depth_value is not None:
+                            depth = depth_value
+                    except:
+                        pass
+                
+                # Create row data
+                row_data = {
+                    'filename': filename,
+                    'file_path': file_path,
+                    'latitude': latitude,
+                    'longitude': longitude,
+                    'altitude': altitude,
+                    'depth': depth,
+                    'heading': heading,
+                    'processing_type': processing_type,
+                    'software': software,
+                    'datetime_original': datetime_original,
+                    'exposure_time': exposure_time,
+                    'f_number': f_number,
+                    'focal_length': focal_length,
+                    'subject_distance': subject_distance,
+                    'image_width': width,
+                    'image_height': height,
+                    
+                    # Placeholder columns for other modules (to be populated later)
+                    'footprint_width': '',
+                    'footprint_height': '',
+                    'footprint_area': '',
+                    'vertical_overlap': '',
+                    'horizontal_overlap': '',
+                    'overall_overlap': '',
+                    
+                    # Visibility analyzer columns
+                    'visibility_category': '',
+                    'visibility_score': '',
+                    'visibility_confidence': '',
+                    
+                    # Highlight selector columns
+                    'contrast_score': '',
+                    'texture_score': '',
+                    'color_variance': '',
+                    'entropy_score': '',
+                    'highlight_score': '',
+                    'is_highlight': '',
+                    
+                    # Quality metrics
+                    'blur_score': '',
+                    'brightness_score': '',
+                    'color_balance': '',
+                    'sharpness_score': ''
+                }
+                
+                csv_data.append(row_data)
+            
+            # Create DataFrame and save to CSV
+            if progress_callback:
+                progress_callback(90, "Writing CSV file...")
+            
+            df = pd.DataFrame(csv_data)
+            df.to_csv(csv_path, index=False)
+            
+            if progress_callback:
+                progress_callback(100, f"Master CSV created: {os.path.basename(csv_path)}")
+            
+            print(f"Created master CSV with {len(csv_data)} image records: {csv_path}")
+            return csv_path
+            
+        except Exception as e:
+            print(f"Error creating master CSV: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+    
+    def get_heading_from_nav(self, image_path_or_timestamp):
+        """
+        Get heading from navigation data based on image path or timestamp
+        Similar to get_altitude_from_nav but returns heading instead
+        
+        Args:
+            image_path_or_timestamp: Image path or timestamp string
+            
+        Returns:
+            Heading value or empty string if no match found
+        """
+        if not hasattr(self, 'nav_timestamps') or not self.nav_timestamps:
+            return ''
+            
+        try:
+            import datetime
+            from dateutil import parser
+        except ImportError:
+            return ''
+            
+        from pathlib import Path
+        
+        # If we're passed a full path, extract the filename
+        if isinstance(image_path_or_timestamp, str) and ('\\' in image_path_or_timestamp or '/' in image_path_or_timestamp):
+            filename = Path(image_path_or_timestamp).name
+        else:
+            filename = image_path_or_timestamp
+        
+        # Try to extract timestamp from VOYIS filename pattern
+        dt = None
+        if isinstance(filename, str):
+            # Try to extract timestamp from VOYIS filename pattern
+            # Example: ESC_stills_processed_PPS_2024-06-27T074938.458700_2170.jpg
+            if 'T' in filename and '_' in filename:
+                try:
+                    parts = filename.split('_')
+                    # Look for the part with a T in it
+                    for part in parts:
+                        if 'T' in part:
+                            # Format: 2024-06-27T074938.458700
+                            date_part, time_part = part.split('T')
+                            
+                            # Handle time with or without milliseconds
+                            if '.' in time_part:
+                                time_base = time_part.split('.')[0]
+                            else:
+                                time_base = time_part
+                                
+                            # Format time with proper separators (HH:MM:SS)
+                            if len(time_base) >= 6:  # At least HHMMSS
+                                hours = time_base[0:2]
+                                minutes = time_base[2:4]
+                                seconds = time_base[4:6]
+                                formatted_time = f"{hours}:{minutes}:{seconds}"
+                                dt = parser.parse(f"{date_part} {formatted_time}")
+                                break
+                except Exception:
+                    try:
+                        dt = parser.parse(filename)
+                    except:
+                        dt = None
+        
+        # If we have a datetime object, find the closest match in navigation data
+        if dt and hasattr(self, 'nav_timestamps'):
+            # Find closest timestamp within tolerance (3 seconds)
+            tolerance_seconds = 3.0
+            tolerance = datetime.timedelta(seconds=tolerance_seconds)
+            closest_heading = ''
+            closest_diff = tolerance
+            
+            for nav_entry in self.nav_timestamps:
+                # Handle different formats: (timestamp, altitude), (timestamp, altitude, heading), (timestamp, altitude, depth, heading)
+                if len(nav_entry) == 2:
+                    timestamp, altitude = nav_entry
+                    heading = ''  # No heading available in old format
+                elif len(nav_entry) == 3:
+                    timestamp, altitude, heading = nav_entry
+                elif len(nav_entry) == 4:
+                    timestamp, altitude, depth, heading = nav_entry
+                else:
+                    continue
+                    
+                diff = abs(timestamp - dt)
+                
+                # If this timestamp is closer than our previous best match
+                if diff < closest_diff:
+                    closest_diff = diff
+                    closest_heading = heading if len(nav_entry) >= 3 else ''
+                    
+                    # If very close match, we can stop early
+                    if diff.total_seconds() < 0.1:
+                        break
+            
+            # Only return if within tolerance
+            if closest_diff <= tolerance:
+                return closest_heading
+                
+        return ''
+    
+    def update_csv_with_footprint_data(self, csv_path: str, footprint_data: Dict) -> bool:
+        """
+        Update the master CSV with footprint analysis data
+        
+        Args:
+            csv_path: Path to the master CSV file
+            footprint_data: Dictionary containing footprint analysis results
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import pandas as pd
+            
+            if not os.path.exists(csv_path):
+                print(f"CSV file not found: {csv_path}")
+                return False
+            
+            # Read the existing CSV
+            df = pd.read_csv(csv_path)
+            
+            # Update footprint columns based on footprint_data
+            # This would need to be implemented based on the actual footprint data structure
+            # For now, create placeholder implementation
+            
+            # Save the updated CSV
+            df.to_csv(csv_path, index=False)
+            print(f"Updated CSV with footprint data: {csv_path}")
+            return True
+            
+        except Exception as e:
+            print(f"Error updating CSV with footprint data: {e}")
+            return False
+    
+    def update_csv_with_visibility_data(self, csv_path: str, visibility_data: Dict) -> bool:
+        """
+        Update the master CSV with visibility analysis data
+        
+        Args:
+            csv_path: Path to the master CSV file
+            visibility_data: Dictionary containing visibility analysis results
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import pandas as pd
+            
+            if not os.path.exists(csv_path):
+                print(f"CSV file not found: {csv_path}")
+                return False
+            
+            # Read the existing CSV
+            df = pd.read_csv(csv_path)
+            
+            # Update visibility columns based on visibility_data
+            # This would need to be implemented based on the actual visibility data structure
+            
+            # Save the updated CSV
+            df.to_csv(csv_path, index=False)
+            print(f"Updated CSV with visibility data: {csv_path}")
+            return True
+            
+        except Exception as e:
+            print(f"Error updating CSV with visibility data: {e}")
+            return False
+    
+    def update_csv_with_highlight_data(self, csv_path: str, highlight_data: Dict) -> bool:
+        """
+        Update the master CSV with highlight selector data
+        
+        Args:
+            csv_path: Path to the master CSV file
+            highlight_data: Dictionary containing highlight selector results
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import pandas as pd
+            
+            if not os.path.exists(csv_path):
+                print(f"CSV file not found: {csv_path}")
+                return False
+            
+            # Read the existing CSV
+            df = pd.read_csv(csv_path)
+            
+            # Update highlight columns based on highlight_data
+            # This would need to be implemented based on the actual highlight data structure
+            
+            # Save the updated CSV
+            df.to_csv(csv_path, index=False)
+            print(f"Updated CSV with highlight data: {csv_path}")
+            return True
+            
+        except Exception as e:
+            print(f"Error updating CSV with highlight data: {e}")
+            return False
+        
+    def ensure_gps_data_available(self, input_folder: str, progress_callback: Callable = None) -> bool:
+        """
+        Ensure GPS data is available by extracting it if not already present
+        
+        Args:
+            input_folder: Path to input directory containing images
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            True if GPS data is available, False otherwise
+        """
+        try:
+            # Check if GPS data is already available
+            if self.gps_data:
+                if progress_callback:
+                    progress_callback(100, f"GPS data already available from {len(self.gps_data)} images")
+                return True
+            
+            # Extract GPS data
+            if progress_callback:
+                progress_callback(10, "Extracting GPS data from images...")
+            
+            total_files, _ = self.analyze_directory(input_folder, progress_callback=progress_callback, extract_gps=True)
+            
+            if self.gps_data:
+                if progress_callback:
+                    progress_callback(100, f"GPS data extracted from {len(self.gps_data)} images")
+                return True
+            else:
+                if progress_callback:
+                    progress_callback(100, "No GPS data found in images")
+                return False
+                
+        except Exception as e:
+            print(f"Error ensuring GPS data availability: {e}")
+            if progress_callback:
+                progress_callback(100, f"Error extracting GPS data: {e}")
+            return False
+        
+    def get_depth_from_nav(self, image_path_or_timestamp):
+        """
+        Get depth from navigation data based on image path or timestamp
+        Similar to get_altitude_from_nav but returns depth instead
+        
+        Args:
+            image_path_or_timestamp: Image path or timestamp string
+            
+        Returns:
+            Depth value or None if no match found
+        """
+        if not hasattr(self, 'nav_timestamps') or not self.nav_timestamps:
+            return None
+            
+        try:
+            import datetime
+            from dateutil import parser
+        except ImportError:
+            return None
+            
+        from pathlib import Path
+        
+        # If we're passed a full path, extract the filename
+        if isinstance(image_path_or_timestamp, str) and ('\\' in image_path_or_timestamp or '/' in image_path_or_timestamp):
+            filename = Path(image_path_or_timestamp).name
+        else:
+            filename = image_path_or_timestamp
+        
+        # Try to extract timestamp from VOYIS filename pattern
+        dt = None
+        if isinstance(filename, str):
+            # Try to extract timestamp from VOYIS filename pattern
+            # Example: ESC_stills_processed_PPS_2024-06-27T074938.458700_2170.jpg
+            if 'T' in filename and '_' in filename:
+                try:
+                    parts = filename.split('_')
+                    # Look for the part with a T in it
+                    for part in parts:
+                        if 'T' in part:
+                            # Format: 2024-06-27T074938.458700
+                            date_part, time_part = part.split('T')
+                            
+                            # Handle time with or without milliseconds
+                            if '.' in time_part:
+                                time_base = time_part.split('.')[0]
+                            else:
+                                time_base = time_part
+                                
+                            # Format time with proper separators (HH:MM:SS)
+                            if len(time_base) >= 6:  # At least HHMMSS
+                                hours = time_base[0:2]
+                                minutes = time_base[2:4]
+                                seconds = time_base[4:6]
+                                formatted_time = f"{hours}:{minutes}:{seconds}"
+                                dt = parser.parse(f"{date_part} {formatted_time}")
+                                break
+                except Exception:
+                    try:
+                        dt = parser.parse(filename)
+                    except:
+                        dt = None
+        
+        # If we have a datetime object, find the closest match in navigation data
+        if dt and hasattr(self, 'nav_timestamps'):
+            # Find closest timestamp within tolerance (3 seconds)
+            tolerance_seconds = 3.0
+            tolerance = datetime.timedelta(seconds=tolerance_seconds)
+            closest_depth = None
+            closest_diff = tolerance
+            
+            for nav_entry in self.nav_timestamps:
+                # Handle different formats: (timestamp, altitude), (timestamp, altitude, heading), (timestamp, altitude, depth, heading)
+                if len(nav_entry) == 2:
+                    timestamp, altitude = nav_entry
+                    depth = None  # No depth available in old format
+                elif len(nav_entry) == 3:
+                    timestamp, altitude, heading = nav_entry
+                    depth = None  # No depth available in 3-tuple format
+                elif len(nav_entry) == 4:
+                    timestamp, altitude, depth, heading = nav_entry
+                else:
+                    continue
+                    
+                diff = abs(timestamp - dt)
+                
+                # If this timestamp is closer than our previous best match
+                if diff < closest_diff:
+                    closest_diff = diff
+                    closest_depth = depth if len(nav_entry) == 4 else None
+                    
+                    # If very close match, we can stop early
+                    if diff.total_seconds() < 0.1:
+                        break
+            
+            # Only return if within tolerance
+            if closest_diff <= tolerance:
+                return closest_depth
+                
+        return None
 

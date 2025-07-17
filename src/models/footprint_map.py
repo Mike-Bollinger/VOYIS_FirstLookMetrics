@@ -2386,40 +2386,202 @@ class FootprintMap:
         except Exception as e:
             print(f"Error creating zoomed overall overlap map: {e}")
 
-    def _detect_outliers(self, gps_data: List[Dict], threshold: float = 3.0) -> List[bool]:
+    def create_footprint_map_from_csv(self, csv_path: str, output_folder: str, 
+                                     filename: str = "Image_Footprints_Map.png") -> Optional[str]:
         """
-        Detect outliers in GPS data using the z-score method
+        Create footprint map from the master CSV file
         
         Args:
-            gps_data: List of dictionaries containing GPS data
-            threshold: Z-score threshold for identifying outliers (default: 3.0)
+            csv_path: Path to the master Image_Metrics.csv file
+            output_folder: Directory to save the footprint map
+            filename: Name for the output file
             
         Returns:
-            List of boolean values indicating if each data point is an outlier
+            Path to created footprint map file, or None if failed
         """
         try:
-            # Extract latitude and longitude
-            lats = np.array([data['latitude'] for data in gps_data])
-            lons = np.array([data['longitude'] for data in gps_data])
+            import pandas as pd
             
-            # Calculate z-scores
-            lat_z = (lats - np.mean(lats)) / np.std(lats)
-            lon_z = (lons - np.mean(lons)) / np.std(lons)
+            # Check if CSV exists, if not try to create it
+            if not os.path.exists(csv_path):
+                print(f"CSV file not found: {csv_path}")
+                print("Attempting to create CSV file...")
+                
+                # Try to create the CSV by finding input folder from CSV path
+                csv_dir = os.path.dirname(csv_path)
+                possible_input_folders = [
+                    os.path.join(csv_dir, '..', 'input'),
+                    os.path.join(csv_dir, 'input'),
+                    os.path.join(csv_dir, '..', 'test_images_auv_proc'),
+                    os.path.join(csv_dir, 'test_images_auv_proc'),
+                    csv_dir
+                ]
+                
+                input_folder = None
+                for folder in possible_input_folders:
+                    folder = os.path.normpath(folder)
+                    if os.path.exists(folder) and any(f.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff')) 
+                                                    for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))):
+                        input_folder = folder
+                        break
+                
+                if input_folder:
+                    from models.metrics import Metrics
+                    metrics = Metrics()
+                    csv_created = metrics.create_image_metrics_csv(input_folder, csv_dir)
+                    if not csv_created:
+                        print("Failed to create CSV file")
+                        return None
+                else:
+                    print("Could not find input folder to create CSV")
+                    return None
             
-            # Identify outliers
-            lat_outliers = np.abs(lat_z) > threshold
-            lon_outliers = np.abs(lon_z) > threshold
+            # Load the CSV file
+            df = pd.read_csv(csv_path)
             
-            # Combine outlier flags
-            outliers = lat_outliers | lon_outliers
+            # Check required columns
+            required_columns = ['filename', 'latitude', 'longitude']
+            missing_columns = [col for col in required_columns if col not in df.columns]
             
-            # Log the number of outliers detected
-            num_outliers = np.sum(outliers)
-            if num_outliers > 0:
-                print(f"Detected {num_outliers} outlier(s) in GPS data")
+            if missing_columns:
+                print(f"Missing required columns in CSV: {missing_columns}")
+                return None
             
-            return outliers.tolist()
+            # Filter out rows with missing GPS data
+            df_filtered = df.dropna(subset=['latitude', 'longitude'])
+            
+            if len(df_filtered) == 0:
+                print("No valid GPS data found in CSV")
+                return None
+            
+            # Convert DataFrame to GPS data format expected by existing methods
+            gps_data = []
+            for _, row in df_filtered.iterrows():
+                gps_point = {
+                    'filename': row['filename'],
+                    'latitude': float(row['latitude']),
+                    'longitude': float(row['longitude']),
+                    'altitude': float(row['altitude']) if pd.notna(row.get('altitude')) else 5.0,  # Default altitude if missing
+                    'heading': float(row['heading']) if pd.notna(row.get('heading')) else 0.0,
+                    'datetime': row.get('datetime_original', ''),
+                    'processing_type': row.get('processing_type', 'unknown')
+                }
+                gps_data.append(gps_point)
+            
+            print(f"Loaded {len(gps_data)} GPS points from CSV for footprint analysis")
+            
+            # Use the existing create_footprint_map method
+            result = self.create_footprint_map(
+                gps_data=gps_data,
+                output_path=output_folder,
+                nav_file_path=None,  # CSV already contains heading data
+                filename=filename
+            )
+            
+            # Update the master CSV with footprint results if successful
+            if result:
+                self._update_master_csv_with_footprint_results(csv_path, gps_data)
+            
+            return result
             
         except Exception as e:
-            print(f"Error detecting outliers in GPS data: {e}")
-            return [False] * len(gps_data)
+            print(f"Error creating footprint map from CSV: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+
+    def _update_master_csv_with_footprint_results(self, csv_path: str, gps_data: list) -> None:
+        """
+        Update the master CSV file with footprint calculation results
+        
+        Args:
+            csv_path: Path to the master CSV file
+            gps_data: List of GPS data points with footprint information
+        """
+        try:
+            import pandas as pd
+            
+            # Load the CSV file
+            df = pd.read_csv(csv_path)
+            
+            # Create mapping from filename to footprint data
+            footprint_data = {}
+            
+            # Add footprint dimensions columns if they don't exist
+            new_columns = ['footprint_width', 'footprint_height', 'footprint_area', 
+                          'vertical_overlap', 'horizontal_overlap', 'overall_overlap']
+            
+            for col in new_columns:
+                if col not in df.columns:
+                    df[col] = None
+            
+            # Update footprint data from GPS data
+            for point in gps_data:
+                filename = point['filename']
+                if filename not in footprint_data:
+                    footprint_data[filename] = {}
+                
+                # Calculate footprint dimensions based on altitude
+                altitude = point.get('altitude', 5.0)
+                
+                # Standard camera parameters for AUV systems
+                sensor_width = 13.2  # mm (typical APS-C sensor)
+                sensor_height = 8.8  # mm
+                focal_length = 12.0  # mm
+                
+                # Calculate footprint size
+                footprint_width = (sensor_width * altitude) / focal_length
+                footprint_height = (sensor_height * altitude) / focal_length
+                footprint_area = footprint_width * footprint_height
+                
+                footprint_data[filename]['footprint_width'] = footprint_width
+                footprint_data[filename]['footprint_height'] = footprint_height
+                footprint_data[filename]['footprint_area'] = footprint_area
+            
+            # Add overlap data if available
+            if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:
+                for overlap in self.vertical_overlap_stats.get('overlap_data', []):
+                    filename1 = overlap.get('filename1', '')
+                    filename2 = overlap.get('filename2', '')
+                    overlap_pct = overlap.get('overlap_percentage', 0.0)
+                    
+                    if filename1 in footprint_data:
+                        footprint_data[filename1]['vertical_overlap'] = overlap_pct
+                    if filename2 in footprint_data:
+                        footprint_data[filename2]['vertical_overlap'] = overlap_pct
+            
+            if hasattr(self, 'horizontal_overlap_stats') and self.horizontal_overlap_stats:
+                for overlap in self.horizontal_overlap_stats.get('overlap_data', []):
+                    filename1 = overlap.get('filename1', '')
+                    filename2 = overlap.get('filename2', '')
+                    overlap_pct = overlap.get('overlap_percentage', 0.0)
+                    
+                    if filename1 in footprint_data:
+                        footprint_data[filename1]['horizontal_overlap'] = overlap_pct
+                    if filename2 in footprint_data:
+                        footprint_data[filename2]['horizontal_overlap'] = overlap_pct
+            
+            if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats:
+                for overlap in self.overall_overlap_stats.get('overlap_data', []):
+                    filename = overlap.get('filename', '')
+                    overlap_count = overlap.get('overlap_count', 0)
+                    
+                    if filename in footprint_data:
+                        footprint_data[filename]['overall_overlap'] = overlap_count
+            
+            # Update the DataFrame
+            for idx, row in df.iterrows():
+                filename = row['filename']
+                if filename in footprint_data:
+                    for col, value in footprint_data[filename].items():
+                        if value is not None:
+                            df.at[idx, col] = value
+            
+            # Save updated CSV
+            df.to_csv(csv_path, index=False)
+            print(f"Updated master CSV with footprint results: {csv_path}")
+            
+        except Exception as e:
+            print(f"Error updating master CSV with footprint results: {e}")
+            import traceback
+            traceback.print_exc()

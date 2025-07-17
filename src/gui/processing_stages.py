@@ -97,7 +97,7 @@ class ProcessingStages:
             result_files = self.altitude_map.export_to_gis_formats(
                 self.metrics.gps_data,
                 output_folder,
-                csv_filename="Image_Locations.csv"
+                csv_filename="Image_Metrics.csv"
             )
             
             if 'csv' in result_files:
@@ -114,7 +114,7 @@ class ProcessingStages:
     def create_simple_csv_export(self, output_folder):
         """Create simple CSV export as fallback"""
         try:
-            csv_path = os.path.join(output_folder, "Image_Locations.csv")
+            csv_path = os.path.join(output_folder, "Image_Metrics.csv")
             import pandas as pd
             df = pd.DataFrame(self.metrics.gps_data)
             
