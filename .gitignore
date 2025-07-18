@@ -12,3 +12,5 @@ tests/*.jpg
 *.jpg
 tests/*.tif
 *.tif
+tests/*.xyz
+*.xyz

@@ -893,7 +893,7 @@ class NavPlotter:
                     depth_scaled = depth_normalized ** 2.5
                     
                     points = ax.scatter(x_data, df[motion], c=depth_scaled, 
-                                      cmap='viridis', s=1, alpha=0.7, vmin=0, vmax=1)
+                                      cmap='viridis_r', s=1, alpha=0.7, vmin=0, vmax=1)
                     if i == 2:  # Only add colorbar to the rightmost plot
                         cbar = plt.colorbar(points, ax=ax)
                         cbar.set_label('Depth (m)', rotation=270, labelpad=15)
@@ -993,7 +993,7 @@ class NavPlotter:
             if len(depth_data) > 0:
                 scatter, cbar = self._create_depth_colored_scatter(
                     ax, depth_data['longitude'], depth_data['latitude'], depth_data['depth'],
-                    colormap='viridis', size=4, alpha=0.8,
+                    colormap='viridis_r', size=4, alpha=0.8,
                     add_colorbar=True, colorbar_label='Depth (m)',
                     log_scale=True  # Use exponential scaling for better depth visualization
                 )
@@ -1022,11 +1022,225 @@ class NavPlotter:
         plt.close()
         log_message(f"Saved comprehensive motion analysis plot: {plot_path}")
         
+        # Create comprehensive time series comparison plot (all motion types together)
+        self._create_comprehensive_timeseries_plot(df, output_dir, available_motion_cols, log_callback)
+        
         # Create individual plots as well
         self._create_individual_plots(df, output_dir, available_motion_cols, log_callback)
         
         log_message("All navigation plots created successfully")
     
+    def _create_comprehensive_timeseries_plot(self, df, output_dir, available_motion_cols, log_callback=None):
+        """Create comprehensive time series comparison plot showing all motion types together"""
+        def log_message(message):
+            print(message)
+            if log_callback:
+                log_callback(message)
+        
+        if not available_motion_cols:
+            log_message("No motion columns available for comprehensive time series plot")
+            return
+        
+        log_message("Creating comprehensive time series comparison plot...")
+        
+        # Create figure with subplots for each motion type - wider and taller to accommodate colorbar and title
+        fig, axes = plt.subplots(len(available_motion_cols), 1, figsize=(18, 5 * len(available_motion_cols)), 
+                                facecolor='white', sharex=True)
+        
+        # Handle single subplot case
+        if len(available_motion_cols) == 1:
+            axes = [axes]
+        
+        # Define colors for each motion type
+        motion_colors = {
+            'heave': '#2E8B57',  # Sea Green
+            'pitch': '#DC143C',  # Crimson
+            'roll': '#228B22'    # Forest Green
+        }
+        
+        # Use datetime if available, otherwise fall back to index
+        if 'datetime' in df.columns and not df['datetime'].isna().all():
+            x_data = df['datetime']
+            x_label = 'Mission Time'
+        else:
+            x_data = df.index
+            x_label = 'Time Index'
+        
+        # Store depth information for colorbar
+        depth_info = None
+        if 'depth' in df.columns:
+            depth_values = df['depth'].copy()
+            min_depth = depth_values.min()
+            max_depth = depth_values.max()
+            
+            # Normalize depth values to 0-1 range
+            if max_depth > min_depth:
+                depth_normalized = (depth_values - min_depth) / (max_depth - min_depth)
+            else:
+                depth_normalized = np.zeros_like(depth_values)
+            
+            # Apply exponential scaling for deeper depth emphasis
+            depth_scaled = depth_normalized ** 2.5
+            
+            depth_info = {
+                'scaled': depth_scaled,
+                'min': min_depth,
+                'max': max_depth,
+                'tick_values': np.linspace(min_depth, max_depth, 5),
+                'tick_positions': None
+            }
+            
+            # Calculate tick positions
+            if max_depth > min_depth:
+                depth_tick_normalized = (depth_info['tick_values'] - min_depth) / (max_depth - min_depth)
+                depth_info['tick_positions'] = depth_tick_normalized ** 2.5
+            else:
+                depth_info['tick_positions'] = np.zeros(5)
+        
+        # Create subplot for each motion type
+        scatter_plots = []  # Store scatter plots for shared colorbar
+        for i, motion in enumerate(available_motion_cols):
+            ax = axes[i]
+            
+            # Get motion data
+            motion_data = df[motion].dropna()
+            if len(motion_data) == 0:
+                continue
+            
+            # Color by depth if available for enhanced visualization
+            if depth_info is not None:
+                # Create depth-colored scatter plot with reversed viridis
+                points = ax.scatter(x_data, df[motion], c=depth_info['scaled'], 
+                                  cmap='viridis_r', s=2, alpha=0.8, vmin=0, vmax=1)
+                scatter_plots.append(points)
+            else:
+                # Use solid line if no depth data
+                ax.plot(x_data, df[motion], color=motion_colors.get(motion, 'blue'), 
+                       linewidth=1, alpha=0.7)
+            
+            # Set labels and title
+            ax.set_ylabel(f'{motion.capitalize()} (°)' if motion != 'heave' else f'{motion.capitalize()} (m)')
+            ax.set_title(f'{motion.capitalize()} Time Series', fontsize=12, pad=10)
+            ax.grid(True, alpha=0.3)
+            
+            # Add statistics text
+            stats_text = f'Mean: {motion_data.mean():.2f}\nStd: {motion_data.std():.2f}\nRange: [{motion_data.min():.2f}, {motion_data.max():.2f}]'
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+                   verticalalignment='top', horizontalalignment='left',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'),
+                   fontsize=9, family='monospace')
+            
+            # Format time axis if using datetime
+            if 'datetime' in df.columns:
+                self._format_datetime_axis(ax, x_data)
+        
+        # Add shared colorbar spanning the entire right side
+        if scatter_plots and depth_info is not None:
+            # Adjust subplot positions to make room for colorbar
+            plt.subplots_adjust(right=0.85)
+            
+            # Create colorbar that spans all subplots, positioned further right
+            cbar_ax = fig.add_axes([0.87, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+            cbar = fig.colorbar(scatter_plots[0], cax=cbar_ax)
+            cbar.set_label('Depth (m)', rotation=270, labelpad=20)
+            
+            # Set colorbar ticks to show actual depth values
+            cbar.set_ticks(depth_info['tick_positions'])
+            cbar.set_ticklabels([f'{d:.1f}' for d in depth_info['tick_values']])
+        
+        # Set x-label only on the bottom subplot
+        axes[-1].set_xlabel(x_label)
+        
+        # Add overall title with more space
+        fig.suptitle('Comprehensive Motion Time Series Comparison', fontsize=18, y=0.98)
+        
+        # Adjust layout - account for colorbar space and title
+        plt.tight_layout()
+        if scatter_plots and depth_info is not None:
+            plt.subplots_adjust(top=0.94, right=0.85)
+        else:
+            plt.subplots_adjust(top=0.94)
+        
+        # Save plot
+        plot_path = os.path.join(output_dir, "Nav_Comprehensive_Timeseries.png")
+        plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
+        plt.close()
+        log_message(f"Saved comprehensive time series plot: {plot_path}")
+        
+        # Also create a single-axis version with all motion types overlaid
+        self._create_overlaid_timeseries_plot(df, output_dir, available_motion_cols, log_callback)
+    
+    def _create_overlaid_timeseries_plot(self, df, output_dir, available_motion_cols, log_callback=None):
+        """Create overlaid time series plot with all motion types on the same axis"""
+        def log_message(message):
+            print(message)
+            if log_callback:
+                log_callback(message)
+        
+        if not available_motion_cols:
+            return
+        
+        log_message("Creating overlaid time series comparison plot...")
+        
+        # Create figure
+        plt.figure(figsize=(15, 8), facecolor='white')
+        
+        # Define colors for each motion type
+        motion_colors = {
+            'heave': '#2E8B57',  # Sea Green
+            'pitch': '#DC143C',  # Crimson
+            'roll': '#228B22'    # Forest Green
+        }
+        
+        # Use datetime if available, otherwise fall back to index
+        if 'datetime' in df.columns and not df['datetime'].isna().all():
+            x_data = df['datetime']
+            x_label = 'Mission Time'
+        else:
+            x_data = df.index
+            x_label = 'Time Index'
+        
+        # Plot each motion type
+        for motion in available_motion_cols:
+            motion_data = df[motion].dropna()
+            if len(motion_data) == 0:
+                continue
+            
+            # Use solid lines for overlaid plot for better visibility
+            plt.plot(x_data, df[motion], color=motion_colors.get(motion, 'blue'), 
+                    linewidth=1.5, alpha=0.8, label=f'{motion.capitalize()}')
+        
+        # Set labels and title
+        plt.xlabel(x_label)
+        plt.ylabel('Motion Values')
+        plt.title('All Motion Types - Overlaid Time Series Comparison', fontsize=14, pad=20)
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='upper right')
+        
+        # Format time axis if using datetime
+        if 'datetime' in df.columns:
+            self._format_datetime_axis(plt.gca(), x_data)
+        
+        # Add statistics box
+        stats_lines = []
+        for motion in available_motion_cols:
+            motion_data = df[motion].dropna()
+            if len(motion_data) > 0:
+                stats_lines.append(f'{motion.capitalize()}: μ={motion_data.mean():.2f}, σ={motion_data.std():.2f}')
+        
+        if stats_lines:
+            stats_text = '\n'.join(stats_lines)
+            plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
+                    verticalalignment='top', horizontalalignment='left',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'),
+                    fontsize=10, family='monospace')
+        
+        # Save plot
+        plot_path = os.path.join(output_dir, "Nav_Overlaid_Timeseries.png")
+        plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
+        plt.close()
+        log_message(f"Saved overlaid time series plot: {plot_path}")
+
     def _create_individual_plots(self, df, output_dir, available_motion_cols, log_callback=None):
         """Create individual plots for each motion type"""
         def log_message(message):
@@ -1039,7 +1253,7 @@ class NavPlotter:
             if 'latitude' in df.columns and 'longitude' in df.columns:
                 plt.figure(figsize=(10, 8), facecolor='white')
                 scatter = plt.scatter(df['longitude'], df['latitude'], 
-                                    c=df[motion], cmap='viridis', s=2, alpha=0.8)
+                                    c=df[motion], cmap='viridis_r', s=2, alpha=0.8)
                 plt.colorbar(scatter, label=f'{motion.capitalize()} (°)' if motion != 'heave' else f'{motion.capitalize()} (m)')
                 plt.xlabel('Longitude (°)')
                 plt.ylabel('Latitude (°)')
@@ -1078,7 +1292,43 @@ class NavPlotter:
                 x_data = df.index
                 x_label = 'Time Index'
             
-            plt.plot(x_data, df[motion], linewidth=1, color='blue', alpha=0.7)
+            # Color by depth if available for enhanced visualization
+            if 'depth' in df.columns:
+                # Apply exponential scaling to emphasize deeper depths
+                depth_values = df['depth'].copy()
+                min_depth = depth_values.min()
+                max_depth = depth_values.max()
+                
+                # Normalize depth values to 0-1 range
+                if max_depth > min_depth:
+                    depth_normalized = (depth_values - min_depth) / (max_depth - min_depth)
+                else:
+                    depth_normalized = np.zeros_like(depth_values)
+                
+                # Apply exponential scaling for deeper depth emphasis
+                depth_scaled = depth_normalized ** 2.5
+                
+                points = plt.scatter(x_data, df[motion], c=depth_scaled, 
+                                  cmap='viridis_r', s=2, alpha=0.8, vmin=0, vmax=1)
+                
+                # Add colorbar with actual depth values
+                cbar = plt.colorbar(points)
+                cbar.set_label('Depth (m)', rotation=270, labelpad=15)
+                
+                # Set colorbar ticks to show actual depth values
+                num_ticks = 5
+                depth_tick_values = np.linspace(min_depth, max_depth, num_ticks)
+                if max_depth > min_depth:
+                    depth_tick_normalized = (depth_tick_values - min_depth) / (max_depth - min_depth)
+                    depth_tick_scaled = depth_tick_normalized ** 2.5
+                else:
+                    depth_tick_scaled = np.zeros(num_ticks)
+                
+                cbar.set_ticks(depth_tick_scaled)
+                cbar.set_ticklabels([f'{d:.1f}' for d in depth_tick_values])
+            else:
+                plt.plot(x_data, df[motion], linewidth=1, color='blue', alpha=0.7)
+            
             plt.xlabel(x_label)
             plt.ylabel(f'{motion.capitalize()} (°)' if motion != 'heave' else f'{motion.capitalize()} (m)')
             plt.title(f'{motion.capitalize()} Time Series')
@@ -1169,7 +1419,7 @@ class NavPlotter:
             
             scatter, cbar = self._create_depth_colored_scatter(
                 plt.gca(), depth_data['longitude'], depth_data['latitude'], depth_data['depth'],
-                colormap='viridis', size=5, alpha=0.8,
+                colormap='viridis_r', size=5, alpha=0.8,
                 add_colorbar=True, colorbar_label='Depth (m)',
                 log_scale=True
             )

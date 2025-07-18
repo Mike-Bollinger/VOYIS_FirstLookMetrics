@@ -61,8 +61,9 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Navigation processing paths (for plotting - text files with heave data)
         self.nav_processing_var = tk.BooleanVar(value=True)
-        self.nav_plot_file_path = tk.StringVar()  # PHINS file
-        self.nav_state_file_path = tk.StringVar()  # NAV_STATE file
+        self.nav_plot_file_path = tk.StringVar()  # NAV_STATE file
+        self.nav_state_file_path = tk.StringVar()  # NAV_STATE file (UI reference)
+        self.phins_ins_path = tk.StringVar()  # PHINS INS file for navigation processing
         
         # Batch processing
         self.batch_mode = False
@@ -254,13 +255,13 @@ class AppWindow(UIComponents, ProcessingController):
         
         # PHINS file selection for heave data
         ttk.Label(nav_frame, text="PHINS INS Text File:").grid(row=1, column=0, sticky='w')
-        self.nav_plot_entry = ttk.Entry(nav_frame, textvariable=self.nav_plot_file_path, width=40)
-        self.nav_plot_entry.grid(row=1, column=1, padx=5, sticky='ew')
-        self.nav_plot_button = ttk.Button(nav_frame, text="Browse...", command=self.select_nav_plot_file)
-        self.nav_plot_button.grid(row=1, column=2)
+        self.phins_ins_entry = ttk.Entry(nav_frame, textvariable=self.phins_ins_path, width=40)
+        self.phins_ins_entry.grid(row=1, column=1, padx=5, sticky='ew')
+        self.phins_ins_button = ttk.Button(nav_frame, text="Browse...", command=self.select_phins_ins_file)
+        self.phins_ins_button.grid(row=1, column=2)
         
         # Add nav plot widgets to list
-        self.input_widgets.extend([self.nav_state_entry, self.nav_state_button, self.nav_plot_entry, self.nav_plot_button])
+        self.input_widgets.extend([self.nav_state_entry, self.nav_state_button, self.phins_ins_entry, self.phins_ins_button])
         
         # LLS Input Section
         lls_frame = ttk.LabelFrame(self.input_frame, text="Laser Data (LLS) Inputs", padding="5")
@@ -550,8 +551,8 @@ class AppWindow(UIComponents, ProcessingController):
             self.nav_path.set(file_path)
             self.log_message(f"Navigation file set to: {file_path}")
 
-    def select_nav_plot_file(self):
-        """Select PHINS INS file for plotting (optional heave data)"""
+    def select_phins_ins_file(self):
+        """Select PHINS INS file for navigation plotting (optional heave data)"""
         file_path = filedialog.askopenfilename(
             title="Select PHINS INS File (Optional - for heave data)",
             filetypes=[
@@ -561,7 +562,7 @@ class AppWindow(UIComponents, ProcessingController):
             ]
         )
         if file_path:
-            self.nav_plot_file_path.set(file_path)
+            self.phins_ins_path.set(file_path)
             self.log_message(f"PHINS INS file set to: {file_path}")
 
     def select_nav_state_file(self):
@@ -576,6 +577,7 @@ class AppWindow(UIComponents, ProcessingController):
         )
         if file_path:
             self.nav_state_file_path.set(file_path)
+            self.nav_plot_file_path.set(file_path)  # Keep them synchronized
             self.log_message(f"NAV_STATE file set to: {file_path}")
 
     def select_visibility_file(self, file_type):

@@ -136,9 +136,12 @@ class ProcessingController:
             # Process Navigation data first if selected
             if nav_selected:
                 self.log_message("Processing Navigation data...")
-                self.log_message("⚠ Navigation plotting functionality has been deprecated and removed")
-                self.log_message("   Please use the individual navigation analysis tools instead")
-                self.log_message("✓ Navigation processing skipped (deprecated)")
+                try:
+                    self.process_navigation_data(output_folder)
+                    self.log_message("✓ Navigation processing completed")
+                except Exception as nav_error:
+                    self.log_message(f"✗ Navigation processing failed: {nav_error}")
+                    self.log_message(f"Traceback: {traceback.format_exc()}")
             
             # Process LLS data if selected
             if lls_selected:
@@ -314,11 +317,13 @@ class ProcessingController:
                         self.log_message(f"⚠ Imagery processing completed with {total_stages - completed_stages} errors")
             
             # Final overall summary
-            total_processes = (1 if lls_selected else 0) + (1 if imagery_selected else 0)
+            total_processes = (1 if nav_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
             self.log_message(f"\n{'='*60}")
             self.log_message(f"OVERALL PROCESSING SUMMARY")
             self.log_message(f"{'='*60}")
             
+            if nav_selected:
+                self.log_message("Navigation Processing: Completed")
             if lls_selected:
                 self.log_message("LLS Processing: Completed")
             if imagery_selected:
@@ -344,14 +349,47 @@ class ProcessingController:
                 self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
     def process_navigation_data(self, output_folder):
-        """Process navigation data for plotting using PhinsData manager or file"""
+        """Process navigation data for plotting using nav_plotter.py"""
         self.log_message("STAGE 1: Processing Navigation data for plotting...")
         
-        # Navigation plotting functionality has been deprecated and removed
-        self.log_message("⚠ Navigation plotting functionality has been deprecated and removed")
-        self.log_message("   Please use the individual navigation analysis tools instead")
-        self.log_message("✓ Navigation processing skipped (deprecated)")
-        return
+        # Get navigation files
+        nav_file = self.nav_plot_file_path.get()  # NAV_STATE.txt file
+        phins_file = self.phins_ins_path.get()    # PHINS INS file (optional, for navigation plotting)
+        
+        if not nav_file or not os.path.exists(nav_file):
+            self.log_message("⚠ Navigation file not specified or doesn't exist. Skipping navigation plotting.")
+            self.log_message("   Please select a NAV_STATE.txt file for navigation plotting")
+            return
+        
+        self.log_message(f"       Using navigation file: {os.path.basename(nav_file)}")
+        if phins_file and os.path.exists(phins_file):
+            self.log_message(f"       Using PHINS file: {os.path.basename(phins_file)}")
+        
+        try:
+            from src.models.nav_plotter import NavPlotter
+            
+            # Create nav plotter instance
+            nav_plotter = NavPlotter(log_callback=self.log_message)
+            
+            # Process navigation data
+            success = nav_plotter.process_navigation_data(
+                nav_file=nav_file,
+                output_folder=output_folder,
+                phins_file=phins_file if phins_file and os.path.exists(phins_file) else None
+            )
+            
+            if success:
+                self.log_message("✓ Navigation plotting completed successfully")
+                self.update_progress(20, "Navigation plotting completed")
+            else:
+                self.log_message("✗ Navigation plotting failed")
+                
+        except ImportError as e:
+            self.log_message(f"Error: Could not import navigation plotting modules: {e}")
+            self.log_message("Navigation plotting will be skipped")
+        except Exception as e:
+            self.log_message(f"Error during navigation plotting: {str(e)}")
+            self.log_message(f"Traceback: {traceback.format_exc()}")
 
     def process_lls_data(self, output_folder):
         """Process LLS data using navigation file"""
@@ -359,8 +397,8 @@ class ProcessingController:
         
         lls_folder = self.lls_path.get()
         
-        # Use navigation file path for LLS processing
-        nav_file = self.nav_path.get()
+        # Use the phins navigation file path for LLS processing 
+        nav_file = self.phins_nav_path.get()
         
         if not lls_folder or not os.path.exists(lls_folder):
             self.log_message("Warning: LLS folder not specified or doesn't exist. Skipping LLS processing.")
@@ -429,7 +467,8 @@ class ProcessingController:
                 'nav_path': self.nav_path.get(),
                 'lls_path': self.lls_path.get(),
                 'phins_nav_path': self.phins_nav_path.get(),
-                'nav_plot_file_path': self.nav_plot_file_path.get()
+                'nav_plot_file_path': self.nav_plot_file_path.get(),
+                'phins_ins_path': self.phins_ins_path.get()
             }
         except Exception as e:
             self.log_message(f"Error saving current paths: {e}")
@@ -444,7 +483,10 @@ class ProcessingController:
                 self.nav_path.set(saved_paths.get('nav_path', ''))
                 self.lls_path.set(saved_paths.get('lls_path', ''))
                 self.phins_nav_path.set(saved_paths.get('phins_nav_path', ''))
-                self.nav_plot_file_path.set(saved_paths.get('nav_plot_file_path', ''))
+                nav_plot_path = saved_paths.get('nav_plot_file_path', '')
+                self.nav_plot_file_path.set(nav_plot_path)
+                self.nav_state_file_path.set(nav_plot_path)  # Keep synchronized
+                self.phins_ins_path.set(saved_paths.get('phins_ins_path', ''))
         except Exception as e:
             self.log_message(f"Error restoring paths: {e}")
     
@@ -893,12 +935,16 @@ class ProcessingController:
                 
                 try:
                     # Set up job-specific paths using standardized column names
-                    input_folder = row.get('Image_Input', '').strip()
-                    output_folder = row.get('Output_folder', '').strip()
-                    nav_file = row.get('Dive_Nav_file', '').strip()
-                    lls_folder = row.get('LLS_Input', '').strip()
-                    phins_nav_file = row.get('PhinsData_Bin_file', '').strip()
-                    phins_data_nav_file = row.get('PhinsData_Nav_file', '').strip()
+                    input_folder = str(row.get('Image_Input', '')).strip() if pd.notna(row.get('Image_Input', '')) else ''
+                    output_folder = str(row.get('Output_folder', '')).strip() if pd.notna(row.get('Output_folder', '')) else ''
+                    nav_file = str(row.get('Dive_Nav_file', '')).strip() if pd.notna(row.get('Dive_Nav_file', '')) else ''
+                    lls_folder = str(row.get('LLS_Input', '')).strip() if pd.notna(row.get('LLS_Input', '')) else ''
+                    phins_nav_file = str(row.get('PhinsData_Bin_file', '')).strip() if pd.notna(row.get('PhinsData_Bin_file', '')) else ''
+                    phins_data_nav_file = str(row.get('PhinsData_Nav_file', '')).strip() if pd.notna(row.get('PhinsData_Nav_file', '')) else ''
+                    
+                    # Navigation module files
+                    nav_state_file = str(row.get('NAV_STATE_file', '')).strip() if pd.notna(row.get('NAV_STATE_file', '')) else ''
+                    phins_ins_file = str(row.get('PHINS_INS_file', '')).strip() if pd.notna(row.get('PHINS_INS_file', '')) else ''
                     
                     # Convert empty strings to None for cleaner logic
                     input_folder = input_folder if input_folder else None
@@ -907,6 +953,8 @@ class ProcessingController:
                     lls_folder = lls_folder if lls_folder else None
                     phins_nav_file = phins_nav_file if phins_nav_file else None
                     phins_data_nav_file = phins_data_nav_file if phins_data_nav_file else None
+                    nav_state_file = nav_state_file if nav_state_file else None
+                    phins_ins_file = phins_ins_file if phins_ins_file else None
                     
                     # Validate required paths - only output is always required
                     if not output_folder:
@@ -915,13 +963,13 @@ class ProcessingController:
                         continue
                     
                     # Check if we have inputs for at least one processing module
-                    has_nav_module = phins_data_nav_file
+                    has_nav_module = nav_state_file  # Navigation module needs NAV_STATE_file
                     has_image_module = input_folder
                     has_lls_module = lls_folder and phins_nav_file
                     
                     if not (has_nav_module or has_image_module or has_lls_module):
                         self.log_message(f"Job {job_num}: Skipping - no valid processing module inputs specified")
-                        self.log_message(f"  Navigation module needs: PhinsData_Nav_file")
+                        self.log_message(f"  Navigation module needs: NAV_STATE_file")
                         self.log_message(f"  Image module needs: Image_Input")
                         self.log_message(f"  LLS module needs: LLS_Input and PhinsData_Bin_file")
                         failed_jobs += 1
@@ -943,7 +991,8 @@ class ProcessingController:
                     # Process this job
                     self.process_single_batch_job(
                         job_num, input_folder, output_folder, 
-                        nav_file, lls_folder, phins_nav_file, phins_data_nav_file
+                        nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
+                        nav_state_file, phins_ins_file
                     )
                     
                     self.log_message(f"Job {job_num} completed successfully")
@@ -974,28 +1023,40 @@ class ProcessingController:
             self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
     def process_single_batch_job(self, job_num, input_folder, output_folder, 
-                                nav_file, lls_folder, phins_nav_file, phins_data_nav_file):
-        """Process a single job from the batch CSV"""
+                                nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
+                                nav_state_file, phins_ins_file):
+        """Process a single job from the batch CSV - mirrors single dive processing"""
         
         # Determine what processing is needed
-        has_nav_module = phins_data_nav_file and os.path.exists(phins_data_nav_file)
-        has_lls = lls_folder and os.path.exists(lls_folder) and phins_nav_file and os.path.exists(phins_nav_file)
-        has_imagery = input_folder and os.path.exists(input_folder)
+        nav_selected = self.nav_processing_var.get()
+        lls_selected = self.lls_processing_var.get()
+        imagery_selected = any([
+            self.basic_metrics_var.get(),
+            self.location_map_var.get(),
+            self.histogram_var.get(),
+            self.footprint_map_var.get(),
+            self.visibility_analyzer_var.get(),
+            self.highlight_selector_var.get()
+        ])
         
         self.log_message(f"Job {job_num} processing:")
-        if has_nav_module:
-            self.log_message(f"  - PHINS data file: {phins_data_nav_file}")
-        if has_lls:
+        if nav_selected:
+            self.log_message(f"  - Navigation processing: ENABLED")
+            if nav_state_file:
+                self.log_message(f"  - Nav state file: {nav_state_file}")
+            if phins_ins_file:
+                self.log_message(f"  - PHINS INS file: {phins_ins_file}")
+        if lls_selected:
             self.log_message(f"  - LLS folder: {lls_folder}")
             self.log_message(f"  - Phins nav: {phins_nav_file}")
-        if has_imagery:
+        if imagery_selected:
             self.log_message(f"  - Input folder: {input_folder}")
             if nav_file and os.path.exists(nav_file):
                 self.log_message(f"  - Nav file: {nav_file}")
         self.log_message(f"  - Output folder: {output_folder}")
         
-        if not has_nav_module and not has_lls and not has_imagery:
-            self.log_message(f"Job {job_num}: No valid inputs found - skipping")
+        if not nav_selected and not lls_selected and not imagery_selected:
+            self.log_message(f"Job {job_num}: No processing functions selected - skipping")
             return
         
         # Save current paths and temporarily override for this job
@@ -1003,121 +1064,95 @@ class ProcessingController:
         
         try:
             # Set paths for this job
-            if has_imagery:
-                self.input_path.set(input_folder)
-                if nav_file and os.path.exists(nav_file):
-                    self.nav_path.set(nav_file)
-                else:
-                    self.nav_path.set('')
+            if imagery_selected:
+                self.input_path.set(input_folder if input_folder else '')
+                self.nav_path.set(nav_file if nav_file and os.path.exists(nav_file) else '')
             else:
                 self.input_path.set('')
                 self.nav_path.set('')
             
-            if has_lls:
-                self.lls_path.set(lls_folder)
-                self.phins_nav_path.set(phins_nav_file)
+            if lls_selected:
+                self.lls_path.set(lls_folder if lls_folder else '')
+                self.phins_nav_path.set(phins_nav_file if phins_nav_file else '')
             else:
                 self.lls_path.set('')
                 self.phins_nav_path.set('')
-            if has_nav_module:
-                self.nav_plot_file_path.set(phins_data_nav_file)
+                
+            if nav_selected:
+                self.nav_plot_file_path.set(nav_state_file if nav_state_file and os.path.exists(nav_state_file) else '')
+                # Set PHINS INS file path for navigation processing (separate from LLS)
+                self.phins_ins_path.set(phins_ins_file if phins_ins_file and os.path.exists(phins_ins_file) else '')
             else:
                 self.nav_plot_file_path.set('')
-            
+                self.phins_ins_path.set('')
+                
             self.output_path.set(output_folder)
             
-            # Process this job
+            # Process this job using the same structure as single processing
             try:
-                # Process Navigation data if selected and available
-                if has_nav_module and self.nav_processing_var.get():
+                # Process Navigation data first if selected
+                if nav_selected:
                     self.log_message(f"Job {job_num}: Processing Navigation data...")
                     try:
-                        self.process_navigation_data(output_folder, None)  # phins_data_nav_file is deprecated
+                        self.process_navigation_data(output_folder)
                         self.log_message(f"Job {job_num}: ✓ Navigation processing completed")
                     except Exception as nav_error:
                         self.log_message(f"Job {job_num}: ✗ Navigation processing failed: {nav_error}")
+                        self.log_message(f"Job {job_num}: Navigation Traceback: {traceback.format_exc()}")
                 
-                # Process LLS data if selected and available
-                if has_lls and self.lls_processing_var.get():
+                # Process LLS data if selected
+                if lls_selected:
                     self.log_message(f"Job {job_num}: Processing LLS data...")
-                    try:
-                        self.process_lls_data(output_folder)
-                        self.log_message(f"Job {job_num}: ✓ LLS processing completed")
-                    except Exception as lls_error:
-                        self.log_message(f"Job {job_num}: ✗ LLS processing failed: {lls_error}")
-                
-                # Process imagery data if selected and available
-                if has_imagery:
-                    # Check which imagery functions are selected
-                    imagery_selected = any([
-                        self.basic_metrics_var.get(), self.location_map_var.get(),
-                        self.histogram_var.get(), self.footprint_map_var.get(),
-                        self.visibility_analyzer_var.get(), self.highlight_selector_var.get()
-                    ])
-                    
-                    if imagery_selected:
-                        self.log_message(f"Job {job_num}: Processing imagery data...")
-                        
-                        # Validate imagery inputs first
-                        if not self._validate_imagery_inputs_for_batch(input_folder):
-                            self.log_message(f"Job {job_num}: ✗ Invalid imagery inputs - skipping imagery processing")
-                        else:
-                            # Load navigation data if provided
-                            if nav_file and os.path.exists(nav_file):
-                                try:
-                                    if self.load_navigation_data(nav_file):
-                                        self.log_message(f"Job {job_num}: ✓ Navigation data loaded successfully")
-                                    else:
-                                        self.log_message(f"Job {job_num}: ⚠ Navigation data load failed - continuing without it")
-                                except Exception as nav_error:
-                                    self.log_message(f"Job {job_num}: ⚠ Navigation data error: {nav_error}")
-                            elif nav_file:
-                                self.log_message(f"Job {job_num}: Navigation file not found: {nav_file}")
-                            else:
-                                self.log_message(f"Job {job_num}: No navigation file specified - will use default heading")
-                            
-                            # IMPORTANT: Process basic metrics FIRST to populate GPS data
-                            try:
-                                self.log_message(f"Job {job_num}: Extracting image metadata...")
-                                
-                                # Always extract GPS data for other stages
-                                extract_gps = True
-                                processed_files, results = self.metrics.analyze_directory(
-                                    input_folder,
-                                    progress_callback=None,
-                                    extract_gps=extract_gps
-                                )
-                                
-                                self.log_message(f"Job {job_num}: ✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
-                                
-                                # Process imagery stages only if we have GPS data for maps
-                                imagery_stages = self.get_required_imagery_stages()
-                                self.log_message(f"Job {job_num}: Processing {len(imagery_stages)} imagery stages...")
-                                
-                                completed_stages = 0
-                                for stage_name, stage_func in imagery_stages:
-                                    if stage_func:
-                                        self.log_message(f"Job {job_num}: {stage_name}")
-                                        try:
-                                            stage_func(input_folder, output_folder)
-                                            completed_stages += 1
-                                        except Exception as stage_error:
-                                            self.log_message(f"Job {job_num}: ✗ Error in {stage_name}: {stage_error}")
-                                            self.log_message(f"Job {job_num}: Continuing with next stage...")
-                                
-                                self.log_message(f"Job {job_num}: ✓ Imagery processing completed ({completed_stages}/{len(imagery_stages)} stages successful)")
-                                
-                            except Exception as imagery_error:
-                                self.log_message(f"Job {job_num}: ✗ Error during imagery processing: {imagery_error}")
-                                self.log_message(traceback.format_exc())
+                    if not lls_folder or not os.path.exists(lls_folder):
+                        self.log_message(f"Job {job_num}: ✗ LLS folder not found: {lls_folder}")
+                    elif not phins_nav_file or not os.path.exists(phins_nav_file):
+                        self.log_message(f"Job {job_num}: ✗ Phins nav file not found: {phins_nav_file}")
                     else:
-                        self.log_message(f"Job {job_num}: No imagery processing functions selected - skipping imagery")
-                else:
-                    self.log_message(f"Job {job_num}: No valid imagery folder - skipping imagery processing")
-                    
+                        try:
+                            self.process_lls_data(output_folder)
+                            self.log_message(f"Job {job_num}: ✓ LLS processing completed")
+                        except Exception as lls_error:
+                            self.log_message(f"Job {job_num}: ✗ LLS processing failed: {lls_error}")
+                            self.log_message(f"Job {job_num}: LLS Traceback: {traceback.format_exc()}")
+                
+                # Process imagery data if selected
+                if imagery_selected:
+                    if not input_folder or not os.path.exists(input_folder):
+                        self.log_message(f"Job {job_num}: ✗ Input folder not found: {input_folder}")
+                    else:
+                        # Mirror the single processing structure exactly
+                        self.log_message(f"Job {job_num}: Processing Imagery data...")
+                        self.log_message(f"Job {job_num}: ⚠ Note: All modules now use CSV-based processing for consistency")
+                        
+                        # Load navigation data from dive nav text file ONLY for imagery
+                        nav_file_for_imagery = None
+                        if nav_file and os.path.exists(nav_file):
+                            nav_file_for_imagery = nav_file
+                            self.log_message(f"Job {job_num}: Navigation source for imagery: {os.path.basename(nav_file_for_imagery)} (Dive Nav text file)")
+                        else:
+                            self.log_message(f"Job {job_num}: ⚠ No Dive Nav text file specified for imagery processing")
+                        
+                        if nav_file_for_imagery:
+                            try:
+                                if self.load_navigation_data_for_imagery_only(nav_file_for_imagery):
+                                    self.log_message(f"Job {job_num}: ✓ Navigation data loaded successfully from text file for imagery processing")
+                                else:
+                                    self.log_message(f"Job {job_num}: ⚠ Navigation data load failed - continuing without it")
+                            except Exception as nav_error:
+                                self.log_message(f"Job {job_num}: ⚠ Navigation data error: {nav_error}")
+                        else:
+                            self.log_message(f"Job {job_num}: ⚠ No navigation file specified - continuing without navigation data")
+                        
+                        # Call the main imagery processing method
+                        self.analyze_images(input_folder, output_folder)
+                        self.log_message(f"Job {job_num}: ✓ Imagery processing completed")
+                
+                self.log_message(f"Job {job_num}: ✓ All processing completed successfully")
+                
             except Exception as processing_error:
-                self.log_message(f"Job {job_num}: ✗ Error during processing: {processing_error}")
-                self.log_message(traceback.format_exc())
+                self.log_message(f"Job {job_num}: ✗ Processing error: {processing_error}")
+                self.log_message(f"Job {job_num}: Traceback: {traceback.format_exc()}")
+                raise processing_error
             
         finally:
             # Always restore original paths
