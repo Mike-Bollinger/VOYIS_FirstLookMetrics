@@ -283,6 +283,7 @@ class NavPlotter:
     def merge_phins_heave(self, nav_df, phins_file_path, log_callback=None):
         """
         Merge heave data from PHINS file into navigation DataFrame
+        Handles both legacy and current PHINS file formats
         
         :param nav_df: Main navigation DataFrame (from NAV_STATE.txt)
         :param phins_file_path: Path to PHINS data file
@@ -338,10 +339,17 @@ class NavPlotter:
             else:
                 log_message("No HEAVE_ data found in PHINS file")
             
-            # If no PHINS data available, ensure nav_df has a heave column (even if empty/zero)
+            # If no PHINS data available, check if nav_df already has heave data
             if 'heave' not in nav_df.columns:
-                nav_df['heave'] = 0.0
-                log_message("Created empty heave column (no PHINS data available)")
+                # Check if we have phins_heave column in the main nav file
+                if 'phins_heave' in nav_df.columns:
+                    nav_df['heave'] = nav_df['phins_heave']
+                    log_message("Used phins_heave column from navigation file")
+                else:
+                    nav_df['heave'] = 0.0
+                    log_message("Created empty heave column (no PHINS data available)")
+            else:
+                log_message("Navigation file already contains heave data")
             
             return nav_df
             
@@ -351,7 +359,13 @@ class NavPlotter:
             
             # Ensure heave column exists even if merging fails
             if 'heave' not in nav_df.columns:
-                nav_df['heave'] = 0.0
+                # Check if we have phins_heave column in the main nav file
+                if 'phins_heave' in nav_df.columns:
+                    nav_df['heave'] = nav_df['phins_heave']
+                    log_message("Used phins_heave column from navigation file as fallback")
+                else:
+                    nav_df['heave'] = 0.0
+                    log_message("Created empty heave column as fallback")
             
             return nav_df
     
@@ -372,25 +386,52 @@ class NavPlotter:
                     break
             
             if mission_time_col:
-                # Convert mission time (format like "5:53:22.4") to datetime
+                # Convert mission time to datetime
                 try:
-                    base_date = "2024-01-01"  # Default date
-                    nav_df['datetime'] = pd.to_datetime(
-                        base_date + ' ' + nav_df[mission_time_col].astype(str),
-                        format='%Y-%m-%d %H:%M:%S.%f',
-                        errors='coerce'
-                    )
-                    # Fill any parsing failures with alternative format
-                    mask = nav_df['datetime'].isna()
-                    if mask.any():
-                        nav_df.loc[mask, 'datetime'] = pd.to_datetime(
-                            base_date + ' ' + nav_df.loc[mask, mission_time_col].astype(str),
-                            format='%Y-%m-%d %H:%M:%S',
+                    base_date = pd.Timestamp('2024-01-01 00:00:00')
+                    
+                    # Check if the values look like milliseconds (large numbers) or time strings
+                    sample_value = str(nav_df[mission_time_col].iloc[0])
+                    
+                    if sample_value.replace('.', '').isdigit() and len(sample_value) >= 6:
+                        # Treat as milliseconds since mission start
+                        mission_ms = pd.to_numeric(nav_df[mission_time_col], errors='coerce')
+                        
+                        # Convert milliseconds to timedelta and add to base date
+                        timedeltas = pd.to_timedelta(mission_ms, unit='ms', errors='coerce')
+                        nav_df['datetime'] = base_date + timedeltas
+                        
+                        valid_count = nav_df['datetime'].notna().sum()
+                        log_message(f"Created datetime from mission milliseconds column '{mission_time_col}' ({valid_count} valid timestamps)")
+                        
+                        # Log some example conversions
+                        if valid_count > 0:
+                            sample_indices = [0, len(nav_df)//2, len(nav_df)-1]
+                            for i in sample_indices:
+                                if i < len(nav_df) and nav_df['datetime'].iloc[i] is not pd.NaT:
+                                    original_ms = mission_ms.iloc[i]
+                                    parsed_time = nav_df['datetime'].iloc[i]
+                                    log_message(f"Example: {original_ms} ms -> {parsed_time.strftime('%H:%M:%S.%f')[:-3]}")
+                    
+                    else:
+                        # Try parsing as time string (format like "5:53:22.4")
+                        base_date_str = "2024-01-01"
+                        nav_df['datetime'] = pd.to_datetime(
+                            base_date_str + ' ' + nav_df[mission_time_col].astype(str),
+                            format='%Y-%m-%d %H:%M:%S.%f',
                             errors='coerce'
                         )
-                    
-                    valid_count = nav_df['datetime'].notna().sum()
-                    log_message(f"Created datetime from mission time column '{mission_time_col}' ({valid_count} valid timestamps)")
+                        # Fill any parsing failures with alternative format
+                        mask = nav_df['datetime'].isna()
+                        if mask.any():
+                            nav_df.loc[mask, 'datetime'] = pd.to_datetime(
+                                base_date_str + ' ' + nav_df.loc[mask, mission_time_col].astype(str),
+                                format='%Y-%m-%d %H:%M:%S',
+                                errors='coerce'
+                            )
+                        
+                        valid_count = nav_df['datetime'].notna().sum()
+                        log_message(f"Created datetime from mission time string column '{mission_time_col}' ({valid_count} valid timestamps)")
                     
                 except Exception as e:
                     log_message(f"Error parsing mission time: {e}")
@@ -419,55 +460,100 @@ class NavPlotter:
             )
     
     def _parse_phins_time(self, time_series, log_callback=None):
-        """Parse PHINS time references to datetime objects (matching mission time format)"""
+        """
+        Parse PHINS time format and convert to datetime objects
+        
+        PHINS time can be in different formats:
+        - Seconds since midnight (e.g., 82045.5924 = 22:47:25.5924)
+        - Decimal mission time (e.g., 1980.193 = 1980.193 seconds from mission start)
+        - Mission time in seconds with separate milliseconds column
+        - Standard time formats
+        
+        Handles midnight transitions where time wraps from ~86399 back to ~0
+        """
         def log_message(message):
             print(message)
             if log_callback:
                 log_callback(message)
         
         try:
-            # PHINS time should be in the same format as mission_msecs (H:MM:SS.f)
-            base_date = "2024-01-01 "
+            log_message(f"Parsing PHINS time series with {len(time_series)} entries")
             
-            # First try with microseconds
-            try:
-                full_time_series = base_date + time_series.astype(str)
-                datetime_series = pd.to_datetime(full_time_series, format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
-                valid_count = datetime_series.notna().sum()
-                if valid_count > 0:
-                    log_message(f"Successfully parsed {valid_count} PHINS timestamps using format with microseconds")
-                    return datetime_series
-            except:
-                pass
+            # Convert time_series to numeric first
+            numeric_time = pd.to_numeric(time_series, errors='coerce')
+            valid_mask = ~numeric_time.isna()
             
-            # Try without microseconds
-            try:
-                full_time_series = base_date + time_series.astype(str)
-                datetime_series = pd.to_datetime(full_time_series, format='%Y-%m-%d %H:%M:%S', errors='coerce')
-                valid_count = datetime_series.notna().sum()
-                if valid_count > 0:
-                    log_message(f"Successfully parsed {valid_count} PHINS timestamps using format without microseconds")
-                    return datetime_series
-            except:
-                pass
+            if not valid_mask.any():
+                log_message("No valid numeric time values found in PHINS time series")
+                return None
             
-            # Try general parsing with base date
-            try:
-                full_time_series = base_date + time_series.astype(str)
-                datetime_series = pd.to_datetime(full_time_series, errors='coerce')
-                valid_count = datetime_series.notna().sum()
-                if valid_count > 0:
-                    log_message(f"Successfully parsed {valid_count} PHINS timestamps using general parser with base date")
-                    return datetime_series
-            except:
-                pass
+            log_message(f"Found {valid_mask.sum()} valid numeric time values")
+            log_message(f"Time range: {numeric_time.min():.3f} to {numeric_time.max():.3f}")
             
-            # If all parsing fails, return None
-            log_message("Failed to parse PHINS timestamps")
-            return None
+            # Check if this looks like seconds since midnight (0-86400 range)
+            max_time = numeric_time.max()
+            min_time = numeric_time.min()
+            
+            if max_time <= 86400 and min_time >= 0:
+                log_message("Detected seconds-since-midnight format")
+                
+                # Handle midnight transitions - look for large backward jumps in time
+                time_diffs = numeric_time.diff()
+                midnight_transitions = time_diffs < -50000  # Large negative jump indicates midnight wrap
+                
+                if midnight_transitions.any():
+                    log_message("Detected midnight transition(s) in time series")
+                    
+                    # Create continuous time by adding 86400 seconds for each day after midnight
+                    continuous_time = numeric_time.copy()
+                    days_offset = 0
+                    
+                    for i in range(1, len(numeric_time)):
+                        if midnight_transitions.iloc[i]:
+                            days_offset += 1
+                            log_message(f"Midnight transition at index {i}: {numeric_time.iloc[i-1]:.3f} -> {numeric_time.iloc[i]:.3f} (adding {days_offset} days)")
+                        
+                        continuous_time.iloc[i] += days_offset * 86400
+                
+                else:
+                    continuous_time = numeric_time.copy()
+                    log_message("No midnight transitions detected")
+                
+                # Convert continuous seconds to datetime
+                base_date = pd.Timestamp('2024-01-01 00:00:00')
+                timedeltas = pd.to_timedelta(continuous_time, unit='s', errors='coerce')
+                datetime_series = base_date + timedeltas
+                
+            else:
+                log_message("Detected mission time format (not seconds since midnight)")
+                # Use original logic for mission time format
+                mission_seconds = numeric_time.copy()
+                base_date = pd.Timestamp('2024-01-01 00:00:00')
+                timedeltas = pd.to_timedelta(mission_seconds, unit='s', errors='coerce')
+                datetime_series = base_date + timedeltas
+            
+            valid_datetime_mask = ~datetime_series.isna()
+            valid_count = valid_datetime_mask.sum()
+            
+            if valid_count > 0:
+                log_message(f"Successfully parsed {valid_count} PHINS timestamps")
+                # Log some example timestamps for verification
+                sample_indices = [0, len(datetime_series)//4, len(datetime_series)//2, 3*len(datetime_series)//4, len(datetime_series)-1]
+                for i in sample_indices:
+                    if i < len(datetime_series) and valid_datetime_mask.iloc[i]:
+                        original_time = numeric_time.iloc[i]
+                        parsed_time = datetime_series.iloc[i]
+                        log_message(f"Example: {original_time:.3f} -> {parsed_time.strftime('%H:%M:%S.%f')[:-3]}")
+                
+                return datetime_series
+            else:
+                log_message("No valid datetime objects could be created from PHINS time")
+                return None
             
         except Exception as e:
             log_message(f"Error in PHINS time parsing: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _merge_by_timestamp(self, nav_df, heave_df, log_callback=None):
@@ -720,7 +806,10 @@ class NavPlotter:
                     column_mapping[col] = 'pitch'
                 elif 'roll' in col_lower and 'std' not in col_lower and 'rate' not in col_lower and 'roll' not in [v for v in column_mapping.values()]:
                     column_mapping[col] = 'roll'
-                elif 'heave' in col_lower and 'heave' not in [v for v in column_mapping.values()]:
+                # Handle both legacy 'heave' and current 'phins_heave' formats
+                elif col_lower == 'phins_heave' and 'heave' not in [v for v in column_mapping.values()]:
+                    column_mapping[col] = 'heave'  # Map phins_heave to heave
+                elif col_lower == 'heave' and 'heave' not in [v for v in column_mapping.values()]:
                     column_mapping[col] = 'heave'
             
             # Rename columns to standard names
@@ -920,7 +1009,6 @@ class NavPlotter:
                 # Format time axis if using datetime
                 if 'datetime' in df.columns:
                     self._format_datetime_axis(ax, x_data)
-                    self._format_datetime_axis(ax, df['datetime'])
         
         # Row 2: Motion histograms with statistics
         for i, motion in enumerate(['heave', 'pitch', 'roll']):
@@ -1384,6 +1472,20 @@ class NavPlotter:
             plt.ylabel('Count')
             plt.title(f'{motion.capitalize()} Distribution')
             plt.grid(True, alpha=0.3)
+            
+            # Save histogram plot
+            if motion == 'heave':
+                plot_path = os.path.join(output_dir, "Nav_Heave_Histogram.png")
+            elif motion == 'pitch':
+                plot_path = os.path.join(output_dir, "Nav_Pitch_Histogram.png")
+            elif motion == 'roll':
+                plot_path = os.path.join(output_dir, "Nav_Roll_Histogram.png")
+            else:
+                plot_path = os.path.join(output_dir, f"Nav_{motion.title()}_Histogram.png")
+            
+            plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
+            plt.close()
+            log_message(f"Saved {motion} histogram: {plot_path}")
         
         # Depth profile time series
         if 'depth' in df.columns:
@@ -2061,7 +2163,7 @@ class NavPlotter:
                     if len(best_parts) > 3:  # Likely a meaningful row
                         # Check if this could be headers (contains text keywords)
                         contains_keywords = any(keyword.lower() in line.lower() for keyword in 
-                                              ['time', 'lat', 'lon', 'head', 'pitch', 'roll', 'heave', 'x', 'y', 'z'])
+                                              ['time', 'lat', 'lon', 'head', 'pitch', 'roll', 'heave', 'phins', 'x', 'y', 'z'])
                         
                         # Check if this could be numeric data
                         numeric_count = 0
@@ -2133,27 +2235,49 @@ class NavPlotter:
             # Create data dictionary similar to what read_unique_identifiers would return
             data_dict = {}
             
-            # Try to identify and extract heave data
+            # Try to identify and extract heave data - handle both legacy and current formats
             heave_cols = []
             for col in df.columns:
                 col_str = str(col).lower()
-                if 'heave' in col_str:
+                # Look for both 'heave' (legacy) and 'phins_heave' (current) formats
+                if 'heave' in col_str and ('phins' in col_str or col_str == 'heave'):
                     heave_cols.append(col)
-            
+        
             if heave_cols:
                 print(f"Found heave columns: {heave_cols}")
-                heave_col = heave_cols[0]  # Use the first heave column found
+                # Prioritize 'phins_heave' over 'heave' if both exist
+                heave_col = None
+                for col in heave_cols:
+                    if 'phins_heave' in str(col).lower():
+                        heave_col = col
+                        break
+                if heave_col is None:
+                    # Fall back to first heave column found
+                    heave_col = heave_cols[0]
                 
-                # Look for time columns
+                print(f"Using heave column: '{heave_col}'")
+                
+                # Look for time columns - handle both legacy and current formats
                 time_cols = []
                 for col in df.columns:
                     col_str = str(col).lower()
-                    if any(time_word in col_str for time_word in ['time', 'timestamp', 'utc', 'gps_time']):
+                    if any(time_word in col_str for time_word in ['time', 'timestamp', 'utc', 'gps_time', 'phins_time']):
                         time_cols.append(col)
                 
                 # Create heave DataFrame
                 if time_cols:
-                    time_col = time_cols[0]
+                    # Prioritize 'phins_time' over other time columns if it exists
+                    time_col = None
+                    for col in time_cols:
+                        if 'phins_time' in str(col).lower():
+                            time_col = col
+                            break
+                    if time_col is None:
+                        # Fall back to first time column found
+                        time_col = time_cols[0]
+                    
+                    print(f"Using time column: '{time_col}'")
+                    
                     heave_data = df[[heave_col, time_col]].copy()
                     heave_data = heave_data.dropna()
                     
@@ -2167,7 +2291,7 @@ class NavPlotter:
                             'Time_REF': heave_data[time_col].astype(str).tolist()
                         }
                         data_dict['HEAVE_'] = pd.DataFrame(heave_dict)
-                        print(f"Created HEAVE_ DataFrame with {len(heave_dict['Heave'])} points")
+                        print(f"Created HEAVE_ DataFrame with {len(heave_dict['Heave'])} points using '{heave_col}' and '{time_col}'")
                 else:
                     # No time column found, use index as time reference
                     heave_data = df[[heave_col]].copy()
@@ -2183,19 +2307,31 @@ class NavPlotter:
                             'Time_REF': [f"idx_{i}" for i in range(len(heave_data))]
                         }
                         data_dict['HEAVE_'] = pd.DataFrame(heave_dict)
-                        print(f"Created HEAVE_ DataFrame with {len(heave_dict['Heave'])} points (index-based time)")
+                        print(f"Created HEAVE_ DataFrame with {len(heave_dict['Heave'])} points using '{heave_col}' (index-based time)")
             
-            # Try to extract other relevant motion data (pitch, roll, etc.)
+            # Try to extract other relevant motion data (pitch, roll, etc.) - handle both legacy and current formats
             attitude_cols = []
             for motion in ['pitch', 'roll', 'heading', 'yaw']:
                 motion_cols = []
                 for col in df.columns:
                     col_str = str(col).lower()
+                    # Look for both legacy format (e.g., 'pitch') and current format (e.g., 'phins_pitch')
                     if motion in col_str and 'rate' not in col_str and 'std' not in col_str:
                         motion_cols.append(col)
                 
                 if motion_cols:
-                    attitude_cols.extend(motion_cols[:1])  # Take first match for each motion type
+                    # Prioritize 'phins_' prefixed columns over legacy columns
+                    selected_col = None
+                    for col in motion_cols:
+                        if f'phins_{motion}' in str(col).lower():
+                            selected_col = col
+                            break
+                    if selected_col is None:
+                        # Fall back to first match
+                        selected_col = motion_cols[0]
+                    
+                    attitude_cols.append(selected_col)
+                    print(f"Selected {motion} column: '{selected_col}' from options: {motion_cols}")
             
             if attitude_cols:
                 print(f"Found attitude columns: {attitude_cols}")
@@ -2204,11 +2340,19 @@ class NavPlotter:
                 time_cols = []
                 for col in df.columns:
                     col_str = str(col).lower()
-                    if any(time_word in col_str for time_word in ['time', 'timestamp', 'utc', 'gps_time']):
+                    if any(time_word in col_str for time_word in ['time', 'timestamp', 'utc', 'gps_time', 'phins_time']):
                         time_cols.append(col)
                 
                 if time_cols:
-                    time_col = time_cols[0]
+                    # Prioritize 'phins_time' over other time columns
+                    time_col = None
+                    for col in time_cols:
+                        if 'phins_time' in str(col).lower():
+                            time_col = col
+                            break
+                    if time_col is None:
+                        time_col = time_cols[0]
+                    
                     attitude_data = df[attitude_cols + [time_col]].copy()
                     attitude_data = attitude_data.dropna()
                     
