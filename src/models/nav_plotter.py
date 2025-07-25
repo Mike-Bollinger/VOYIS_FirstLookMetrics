@@ -1072,23 +1072,23 @@ class NavPlotter:
             # Format coordinate axes to avoid scientific notation
             self._format_coordinate_axis(ax, 'both')
         
-        # Bathymetry map (right half of bottom area, taller)
+        # Vehicle Depth map (right half of bottom area, taller)
         if 'depth' in df.columns and 'latitude' in df.columns and 'longitude' in df.columns:
             ax = plt.subplot2grid((5, 6), (3, 3), colspan=3, rowspan=2)
             
-            # Create enhanced bathymetry visualization
+            # Create enhanced vehicle depth visualization
             depth_data = df.dropna(subset=['depth', 'latitude', 'longitude'])
             if len(depth_data) > 0:
                 scatter, cbar = self._create_depth_colored_scatter(
                     ax, depth_data['longitude'], depth_data['latitude'], depth_data['depth'],
                     colormap='viridis_r', size=4, alpha=0.8,
-                    add_colorbar=True, colorbar_label='Depth (m)',
+                    add_colorbar=True, colorbar_label='Vehicle Depth (m)',
                     log_scale=True  # Use exponential scaling for better depth visualization
                 )
                 
                 # Add depth statistics
                 depth_stats = depth_data['depth']
-                stats_text = f'Depth Statistics\nn: {len(depth_stats)}\nMin: {depth_stats.min():.1f}m\nMax: {depth_stats.max():.1f}m\nMean: {depth_stats.mean():.1f}m\nStd: {depth_stats.std():.1f}m'
+                stats_text = f'Vehicle Depth Stats\nn: {len(depth_stats)}\nMin: {depth_stats.min():.1f}m\nMax: {depth_stats.max():.1f}m\nMean: {depth_stats.mean():.1f}m\nStd: {depth_stats.std():.1f}m'
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
                        verticalalignment='top', horizontalalignment='left',
                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'),
@@ -1096,7 +1096,7 @@ class NavPlotter:
             
             ax.set_xlabel('Longitude (°)')
             ax.set_ylabel('Latitude (°)')
-            ax.set_title('Bathymetry Map')
+            ax.set_title('Vehicle Depth Map')
             ax.grid(True, alpha=0.3)
             ax.tick_params(axis='x', rotation=45)
             # Format coordinate axes to avoid scientific notation
@@ -1115,6 +1115,9 @@ class NavPlotter:
         
         # Create individual plots as well
         self._create_individual_plots(df, output_dir, available_motion_cols, log_callback)
+        
+        # Create comprehensive depth vs bathymetry comparison plot
+        self._create_depth_bathymetry_comparison(df, output_dir, log_callback)
         
         log_message("All navigation plots created successfully")
     
@@ -1528,16 +1531,55 @@ class NavPlotter:
             
             plt.xlabel('Longitude (°)')
             plt.ylabel('Latitude (°)')
-            plt.title('Bathymetry Map')
+            plt.title('Vehicle Depth Map')
             plt.grid(True, alpha=0.3)
             plt.tick_params(axis='x', rotation=45)
             # Format coordinate axes to avoid scientific notation
             self._format_coordinate_axis(plt.gca(), 'both')
             
-            plot_path = os.path.join(output_dir, "Nav_Bathymetry_Map.png")
+            plot_path = os.path.join(output_dir, "Nav_Depth_Map.png")
             plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
             plt.close()
-            log_message(f"Saved bathymetry map: {plot_path}")
+            log_message(f"Saved vehicle depth map: {plot_path}")
+        
+        # Standalone vehicle bathymetry map (depth + altitude)
+        if 'depth' in df.columns and 'altitude' in df.columns and 'latitude' in df.columns and 'longitude' in df.columns:
+            plt.figure(figsize=(12, 10), facecolor='white')
+            
+            # Calculate bathymetry (depth + altitude)
+            df_with_bathymetry = df.dropna(subset=['depth', 'altitude', 'latitude', 'longitude']).copy()
+            df_with_bathymetry['bathymetry'] = df_with_bathymetry['depth'] + df_with_bathymetry['altitude']
+            
+            if len(df_with_bathymetry) > 0:
+                scatter, cbar = self._create_depth_colored_scatter(
+                    plt.gca(), df_with_bathymetry['longitude'], df_with_bathymetry['latitude'], 
+                    df_with_bathymetry['bathymetry'],
+                    colormap='viridis', size=5, alpha=0.8,
+                    add_colorbar=True, colorbar_label='Bathymetry (m)',
+                    log_scale=True
+                )
+                
+                plt.xlabel('Longitude (°)')
+                plt.ylabel('Latitude (°)')
+                plt.title('Vehicle Bathymetry Map')
+                plt.grid(True, alpha=0.3)
+                plt.tick_params(axis='x', rotation=45)
+                # Format coordinate axes to avoid scientific notation
+                self._format_coordinate_axis(plt.gca(), 'both')
+                
+                plot_path = os.path.join(output_dir, "Nav_Bathymetry_Map.png")
+                plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
+                plt.close()
+                log_message(f"Saved vehicle bathymetry map: {plot_path}")
+            else:
+                log_message("No valid data points for bathymetry map (depth + altitude)")
+        elif 'depth' not in df.columns or 'altitude' not in df.columns:
+            missing_cols = []
+            if 'depth' not in df.columns:
+                missing_cols.append('depth')
+            if 'altitude' not in df.columns:
+                missing_cols.append('altitude')
+            log_message(f"Skipping bathymetry map - missing columns: {missing_cols}")
         
         # Standalone Crab Index plots
         if 'crab_index' in df.columns:
@@ -1780,6 +1822,120 @@ class NavPlotter:
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                 plt.close()
                 log_message(f"Saved enhanced crab index analysis: {plot_path}")
+
+    def _create_depth_bathymetry_comparison(self, df, output_dir, log_callback=None):
+        """Create a time series comparison between vehicle depth and bathymetry (depth + altitude)"""
+        def log_message(message):
+            print(message)
+            if log_callback:
+                log_callback(message)
+        
+        # Check if we have the required data for depth plotting
+        if 'depth' not in df.columns:
+            log_message("Skipping depth/bathymetry time series - missing depth column")
+            return
+        
+        log_message("Creating depth vs bathymetry time series comparison plot...")
+        
+        # Create figure for time series comparison
+        plt.figure(figsize=(15, 8), facecolor='white')
+        
+        # Determine time axis
+        if 'datetime' in df.columns and not df['datetime'].isna().all():
+            x_data = df['datetime']
+            x_label = 'Mission Time'
+            use_datetime = True
+        else:
+            x_data = df.index
+            x_label = 'Time Index'
+            use_datetime = False
+        
+        # Plot vehicle depth
+        depth_data = df['depth'].dropna()
+        valid_depth_indices = df['depth'].notna()
+        
+        if len(depth_data) > 0:
+            plt.plot(x_data[valid_depth_indices], depth_data, 
+                    linewidth=2, alpha=0.8, color='#1f77b4', label='Vehicle Depth')
+        
+        # Plot bathymetry (depth + altitude) if altitude data is available
+        if 'altitude' in df.columns:
+            # Calculate bathymetry for points where both depth and altitude are available
+            valid_bathy_mask = df['depth'].notna() & df['altitude'].notna()
+            
+            if valid_bathy_mask.any():
+                bathymetry = df.loc[valid_bathy_mask, 'depth'] + df.loc[valid_bathy_mask, 'altitude']
+                bathy_x_data = x_data[valid_bathy_mask]
+                
+                plt.plot(bathy_x_data, bathymetry, 
+                        linewidth=2, alpha=0.8, color='#ff7f0e', 
+                        label='Vehicle Bathymetry (Depth + Altitude)')
+                
+                # Add statistics for both measurements
+                depth_stats = depth_data.describe()
+                bathy_stats = bathymetry.describe()
+                altitude_stats = df.loc[valid_bathy_mask, 'altitude'].describe()
+                
+                stats_text = (f'Depth Stats (n={len(depth_data)}):\n'
+                             f'  Mean: {depth_stats["mean"]:.1f}m, Std: {depth_stats["std"]:.1f}m\n'
+                             f'  Range: [{depth_stats["min"]:.1f}, {depth_stats["max"]:.1f}]m\n\n'
+                             f'Bathymetry Stats (n={len(bathymetry)}):\n'
+                             f'  Mean: {bathy_stats["mean"]:.1f}m, Std: {bathy_stats["std"]:.1f}m\n'
+                             f'  Range: [{bathy_stats["min"]:.1f}, {bathy_stats["max"]:.1f}]m\n\n'
+                             f'Altitude Stats (n={len(altitude_stats)}):\n'
+                             f'  Mean: {altitude_stats["mean"]:.1f}m, Std: {altitude_stats["std"]:.1f}m')
+                
+                # Calculate separation between depth and bathymetry
+                separation = bathymetry - df.loc[valid_bathy_mask, 'depth']
+                stats_text += (f'\n\nSeparation (Altitude):\n'
+                              f'  Mean: {separation.mean():.1f}m, Std: {separation.std():.1f}m')
+                
+                legend_title = 'Vehicle Measurements'
+            else:
+                # No valid bathymetry data
+                depth_stats = depth_data.describe()
+                stats_text = (f'Depth Stats (n={len(depth_data)}):\n'
+                             f'  Mean: {depth_stats["mean"]:.1f}m, Std: {depth_stats["std"]:.1f}m\n'
+                             f'  Range: [{depth_stats["min"]:.1f}, {depth_stats["max"]:.1f}]m\n\n'
+                             f'Bathymetry: No valid data\n'
+                             f'(altitude data incomplete)')
+                
+                legend_title = 'Vehicle Depth Only'
+        else:
+            # No altitude data available
+            depth_stats = depth_data.describe()
+            stats_text = (f'Depth Stats (n={len(depth_data)}):\n'
+                         f'  Mean: {depth_stats["mean"]:.1f}m, Std: {depth_stats["std"]:.1f}m\n'
+                         f'  Range: [{depth_stats["min"]:.1f}, {depth_stats["max"]:.1f}]m\n\n'
+                         f'Bathymetry: Altitude data not available')
+            
+            legend_title = 'Vehicle Depth Only'
+        
+        # Formatting and labels
+        plt.xlabel(x_label)
+        plt.ylabel('Depth/Bathymetry (m)')
+        plt.title('Vehicle Depth vs Bathymetry Time Series\n(Positive values = deeper)')
+        plt.legend(title=legend_title, loc='upper left')
+        plt.grid(True, alpha=0.3)
+        
+        # Add statistics text box
+        plt.text(0.98, 0.98, stats_text, transform=plt.gca().transAxes, 
+                verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9, edgecolor='gray'),
+                fontsize=9, family='monospace')
+        
+        # Format time axis if using datetime
+        if use_datetime:
+            self._format_datetime_axis(plt.gca(), x_data)
+        
+        # Invert y-axis so depth increases downward (oceanographic convention)
+        plt.gca().invert_yaxis()
+        
+        # Save the plot
+        plot_path = os.path.join(output_dir, "Nav_Depth_vs_Bathymetry_Timeseries.png")
+        plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
+        plt.close()
+        log_message(f"Saved depth vs bathymetry time series: {plot_path}")
 
     def _calculate_crab_index(self, df, window_size=5, log_callback=None):
         """
