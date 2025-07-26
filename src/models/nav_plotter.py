@@ -1668,9 +1668,9 @@ class NavPlotter:
                 scatter, cbar = self._create_depth_colored_scatter(
                     plt.gca(), df_with_bathymetry['longitude'], df_with_bathymetry['latitude'], 
                     df_with_bathymetry['bathymetry'],
-                    colormap='viridis', size=5, alpha=0.8,
+                    colormap='turbo_r', size=5, alpha=0.8,
                     add_colorbar=True, colorbar_label='Bathymetry (m)',
-                    log_scale=True
+                    log_scale=False
                 )
                 
                 plt.xlabel('Longitude (°)')

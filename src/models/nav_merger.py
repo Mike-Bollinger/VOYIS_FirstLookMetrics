@@ -41,6 +41,15 @@ class NavigationDataMerger:
         # Track whether any midnight crossover was detected during processing
         self.midnight_crossover_detected = False
         
+        # Initialize altitude filter parameters with sensible defaults
+        self.altitude_filter_params = {
+            'method': 'combined',
+            'z_threshold': 3.0,
+            'iqr_multiplier': 2.0,
+            'rolling_window': 50,
+            'rolling_threshold': 3.0
+        }
+        
         # Define column mappings for each file type based on actual sample data
         self.column_mappings = {
             'phins_ins': {
@@ -137,6 +146,15 @@ class NavigationDataMerger:
         # Define required columns for navigation data
         self.required_columns = ['time', 'latitude', 'longitude', 'depth']
         self.optional_columns = ['heading', 'pitch', 'roll', 'heave', 'altitude']
+        
+        # Default altitude filter parameters
+        self.altitude_filter_params = {
+            'method': 'combined',
+            'z_threshold': 3.0,
+            'iqr_multiplier': 2.0,
+            'rolling_window': 50,
+            'rolling_threshold': 3.0
+        }
         
     def log_message(self, message):
         """Log message with optional callback"""
@@ -966,7 +984,10 @@ class NavigationDataMerger:
         # Create datetime column from time
         df = self._create_datetime_column(df)
         
-        # Calculate derived metrics
+        # Filter altitude outliers before calculating derived metrics
+        df = self._filter_altitude_outliers(df, **self.altitude_filter_params)
+        
+        # Calculate derived metrics (using filtered altitude data)
         df = self._calculate_derived_metrics(df)
         
         # Add midnight crossover flag as metadata
@@ -1122,7 +1143,6 @@ class NavigationDataMerger:
         for key, path in identified_files.items():
             if key not in final_files:
                 final_files[key] = path
-        
         if final_files:
             log_message(f"Selected navigation files in priority order:")
             for file_type, file_path in final_files.items():
@@ -1152,6 +1172,136 @@ class NavigationDataMerger:
         # Merge the identified files
         return self.merge_navigation_files(nav_files)
     
+    def set_altitude_filter_parameters(self, method='combined', z_threshold=3.0, iqr_multiplier=2.0, rolling_window=50, rolling_threshold=3.0):
+        """
+        Configure altitude outlier filter parameters.
+        
+        Args:
+            method: Outlier detection method ('z_score', 'iqr', 'rolling_median', 'combined')
+            z_threshold: Z-score threshold for outlier detection (default: 3.0)
+            iqr_multiplier: IQR multiplier for outlier detection (default: 2.0)
+            rolling_window: Window size for rolling median filter (default: 50)
+            rolling_threshold: Threshold for rolling median filter (default: 3.0)
+        """
+        self.altitude_filter_params = {
+            'method': method,
+            'z_threshold': z_threshold,
+            'iqr_multiplier': iqr_multiplier,
+            'rolling_window': rolling_window,
+            'rolling_threshold': rolling_threshold
+        }
+        self.log_message(f"Altitude filter parameters updated: method={method}, z_threshold={z_threshold}")
+
+    def _filter_altitude_outliers(self, df, method='combined', z_threshold=3.0, iqr_multiplier=2.0, rolling_window=50, rolling_threshold=3.0):
+        """
+        Filter altitude outliers using robust statistical methods.
+        
+        When an AUV's altimeter loses bottom lock (e.g., at the surface), it can report 
+        spurious altitude values that need to be filtered out for accurate bathymetry calculations.
+        
+        Args:
+            df: DataFrame with altitude data
+            method: Outlier detection method ('z_score', 'iqr', 'rolling_median', 'combined')
+            z_threshold: Z-score threshold for outlier detection (default: 3.0)
+            iqr_multiplier: IQR multiplier for outlier detection (default: 2.0) 
+            rolling_window: Window size for rolling median filter (default: 50)
+            rolling_threshold: Threshold for rolling median filter (default: 3.0)
+            
+        Returns:
+            DataFrame with filtered altitude data (outliers set to NaN)
+        """
+        if 'altitude' not in df.columns:
+            return df
+            
+        # Get original altitude data
+        original_altitude = df['altitude'].copy()
+        valid_mask = original_altitude.notna()
+        
+        if valid_mask.sum() < 10:  # Need at least 10 valid points for meaningful statistics
+            self.log_message("Insufficient altitude data for outlier filtering (< 10 valid points)")
+            return df
+            
+        valid_altitudes = original_altitude[valid_mask]
+        outlier_mask = pd.Series(False, index=df.index)
+        
+        self.log_message(f"Filtering altitude outliers using {method} method...")
+        self.log_message(f"Original altitude range: {valid_altitudes.min():.2f}m to {valid_altitudes.max():.2f}m")
+        
+        # Method 1: Z-score based outlier detection
+        if method in ['z_score', 'combined']:
+            mean_alt = valid_altitudes.mean()
+            std_alt = valid_altitudes.std()
+            
+            if std_alt > 0:  # Avoid division by zero
+                z_scores = np.abs((original_altitude - mean_alt) / std_alt)
+                z_outliers = z_scores > z_threshold
+                outlier_mask |= z_outliers
+                z_outlier_count = z_outliers.sum()
+                self.log_message(f"  Z-score method: detected {z_outlier_count} outliers (threshold: {z_threshold})")
+        
+        # Method 2: Interquartile Range (IQR) based detection
+        if method in ['iqr', 'combined']:
+            q1 = valid_altitudes.quantile(0.25)
+            q3 = valid_altitudes.quantile(0.75)
+            iqr = q3 - q1
+            
+            if iqr > 0:  # Avoid edge case where all values are the same
+                lower_bound = q1 - iqr_multiplier * iqr
+                upper_bound = q3 + iqr_multiplier * iqr
+                
+                iqr_outliers = (original_altitude < lower_bound) | (original_altitude > upper_bound)
+                outlier_mask |= iqr_outliers
+                iqr_outlier_count = iqr_outliers.sum()
+                self.log_message(f"  IQR method: detected {iqr_outlier_count} outliers (bounds: {lower_bound:.2f}m to {upper_bound:.2f}m)")
+        
+        # Method 3: Rolling median based detection (good for temporal outliers)
+        if method in ['rolling_median', 'combined']:
+            # Calculate rolling median and standard deviation
+            rolling_median = original_altitude.rolling(window=rolling_window, center=True, min_periods=5).median()
+            rolling_std = original_altitude.rolling(window=rolling_window, center=True, min_periods=5).std()
+            
+            # Detect points that deviate significantly from local trend
+            deviation = np.abs(original_altitude - rolling_median)
+            rolling_outliers = (deviation > rolling_threshold * rolling_std) & rolling_std.notna()
+            outlier_mask |= rolling_outliers
+            rolling_outlier_count = rolling_outliers.sum()
+            self.log_message(f"  Rolling median method: detected {rolling_outlier_count} outliers (window: {rolling_window}, threshold: {rolling_threshold})")
+        
+        # Apply additional physics-based filters for extreme cases
+        # Filter extremely high altitudes (likely altimeter errors at surface)
+        max_reasonable_altitude = valid_altitudes.quantile(0.95) + 3 * valid_altitudes.std()
+        max_reasonable_altitude = max(max_reasonable_altitude, 100.0)  # At least 100m ceiling
+        extreme_high = original_altitude > max_reasonable_altitude
+        outlier_mask |= extreme_high
+        extreme_high_count = extreme_high.sum()
+        if extreme_high_count > 0:
+            self.log_message(f"  Physics filter: detected {extreme_high_count} extremely high altitude values (>{max_reasonable_altitude:.1f}m)")
+        
+        # Filter negative altitudes (physically impossible for bottom-looking altimeter)
+        negative_altitudes = original_altitude < 0
+        outlier_mask |= negative_altitudes  
+        negative_count = negative_altitudes.sum()
+        if negative_count > 0:
+            self.log_message(f"  Physics filter: detected {negative_count} negative altitude values")
+        
+        # Apply outlier mask by setting outliers to NaN
+        total_outliers = outlier_mask.sum()
+        if total_outliers > 0:
+            df.loc[outlier_mask, 'altitude'] = np.nan
+            remaining_valid = df['altitude'].notna().sum()
+            outlier_percentage = (total_outliers / len(df)) * 100
+            self.log_message(f"  Total outliers filtered: {total_outliers} ({outlier_percentage:.1f}% of data)")
+            self.log_message(f"  Remaining valid altitude points: {remaining_valid}")
+            
+            # Log altitude range after filtering
+            if remaining_valid > 0:
+                filtered_altitudes = df['altitude'].dropna()
+                self.log_message(f"  Filtered altitude range: {filtered_altitudes.min():.2f}m to {filtered_altitudes.max():.2f}m")
+        else:
+            self.log_message("  No altitude outliers detected")
+            
+        return df
+
 
 def merge_navigation_files(file_paths, log_callback=None):
     """
