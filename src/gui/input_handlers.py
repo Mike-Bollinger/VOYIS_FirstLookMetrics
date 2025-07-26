@@ -296,3 +296,26 @@ class InputHandlers:
             return False
         
         return True
+    
+    def select_nav_directory(self):
+        """Select directory containing navigation files for automatic processing"""
+        directory_path = filedialog.askdirectory(
+            title="Select Directory Containing Navigation Files"
+        )
+        if directory_path:
+            self.nav_directory_path.set(directory_path)
+            self.log_message(f"Navigation directory set to: {directory_path}")
+            
+            # Scan directory and report what navigation files were found
+            try:
+                from src.models.nav_merger import NavigationDataMerger
+                merger = NavigationDataMerger()
+                found_files = merger.scan_directory_for_navigation_files(directory_path)
+                
+                if found_files:
+                    file_types = list(found_files.keys())
+                    self.log_message(f"Found navigation file types: {', '.join(file_types)}")
+                else:
+                    self.log_message("Warning: No navigation files found in selected directory")
+            except Exception as e:
+                self.log_message(f"Error scanning navigation directory: {str(e)}")

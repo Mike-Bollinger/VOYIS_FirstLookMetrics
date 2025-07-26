@@ -15,6 +15,9 @@ from datetime import datetime, timedelta
 import seaborn as sns
 import os
 
+# Import the navigation data merger
+from src.models.nav_merger import NavigationDataMerger
+
 def load_phins_data(file_path):
     """Load and clean PHINS INS data"""
     try:
@@ -190,36 +193,6 @@ def create_navigation_plots(df):
     plt.tight_layout()
     return fig
 
-def analyze_navigation_quality(df):
-    """Analyze navigation data quality"""
-    print("\n=== Navigation Data Quality Analysis ===")
-    print(f"Total data points: {len(df)}")
-    print(f"Time span: {df.index[0]} to {df.index[-1]} (indices)")
-    
-    # Position statistics
-    print(f"\nPosition Range:")
-    print(f"Latitude: {df['latitude'].min():.6f} to {df['latitude'].max():.6f}")
-    print(f"Longitude: {df['longitude'].min():.6f} to {df['longitude'].max():.6f}")
-    print(f"Depth: {df['depth'].min():.2f} to {df['depth'].max():.2f} m")
-    
-    # Position differences between GPS and PHINS
-    lat_diff = df['latitude'] - df['phins_lat']
-    lon_diff = df['longitude'] - df['phins_lon']
-    depth_diff = df['depth'] - df['phins_depth']
-    
-    print(f"\nGPS vs PHINS Differences:")
-    print(f"Latitude difference - Mean: {lat_diff.mean():.8f}, Std: {lat_diff.std():.8f}")
-    print(f"Longitude difference - Mean: {lon_diff.mean():.8f}, Std: {lon_diff.std():.8f}")
-    print(f"Depth difference - Mean: {depth_diff.mean():.3f} m, Std: {depth_diff.std():.3f} m")
-    
-    # Motion statistics
-    print(f"\nMotion Statistics:")
-    print(f"Max velocity North: {df['vel_north'].max():.3f} m/s")
-    print(f"Max velocity East: {df['vel_east'].max():.3f} m/s")
-    print(f"Max velocity Down: {df['vel_down'].max():.3f} m/s")
-    print(f"Max heading rate: {df['heading_rate'].max():.3f} deg/s")
-    print(f"Max heave: {df['heave'].max():.3f} m")
-
 class NavPlotter:
     """Navigation data plotting class for VOYIS First Look Metrics GUI"""
     
@@ -232,6 +205,60 @@ class NavPlotter:
         
         # Store the log callback for use in methods
         self.log_callback = log_callback
+        
+        # Initialize navigation data merger
+        self.nav_merger = NavigationDataMerger(log_callback)
+    
+    def log_message(self, message):
+        """Log a message using the callback if available"""
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message)
+    
+    def process_navigation_files(self, nav_files, output_dir, dive_name="Navigation", log_callback=None):
+        """
+        Process multiple navigation files and create plots
+        
+        :param nav_files: List of navigation file paths or dict with file_type: path mappings
+        :param output_dir: Directory to save the plots
+        :param dive_name: Name for the dive (used in filenames)
+        :param log_callback: Optional callback function for logging messages to GUI (overrides constructor callback)
+        """
+        # Use provided callback or fall back to stored callback
+        active_callback = log_callback or self.log_callback
+        
+        def log_message(message):
+            print(message)
+            if active_callback:
+                active_callback(message)
+        
+        try:
+            log_message(f"Processing navigation files for: {dive_name}")
+            
+            # Merge navigation data from multiple sources
+            df = self.nav_merger.merge_navigation_files(nav_files)
+            
+            if df is None or df.empty:
+                raise ValueError("Failed to merge navigation data from provided files")
+            
+            log_message(f"Successfully merged navigation data: {len(df)} data points")
+            
+            # Create comprehensive navigation plots
+            self.create_nav_plots(df, output_dir, dive_name, active_callback)
+            
+            # Analyze navigation quality
+            self.analyze_nav_quality(df, active_callback)
+            
+            log_message("Navigation plotting and analysis completed")
+            return True  # Indicate success
+            
+        except Exception as e:
+            error_msg = f"Error processing navigation files: {str(e)}"
+            log_message(error_msg)
+            import traceback
+            traceback.print_exc()
+            return False  # Indicate failure
     
     def process_navigation_file(self, nav_file_path, output_dir, dive_name="Navigation", log_callback=None, phins_file_path=None):
         """
@@ -889,19 +916,54 @@ class NavPlotter:
         required_motion_cols = ['heave', 'pitch', 'roll']
         available_motion_cols = []
         
+        log_message(f"Checking for motion columns in {len(df.columns)} total columns...")
+        log_message(f"Available columns: {list(df.columns)}")
+        
         # Map common column variations to standard names
         for motion_col in required_motion_cols:
             found_col = None
+            
+            # First, look for exact matches
             for col in df.columns:
-                col_lower = col.lower()
-                if motion_col in col_lower and 'rate' not in col_lower and 'std' not in col_lower:
+                if col.lower() == motion_col.lower():
                     found_col = col
                     break
             
+            # If no exact match, look for columns containing the motion name
+            if not found_col:
+                for col in df.columns:
+                    col_lower = col.lower()
+                    if (motion_col in col_lower and 
+                        'rate' not in col_lower and 
+                        'std' not in col_lower and
+                        'cal' not in col_lower and  # Exclude calibration columns like dvl_cal_pitch
+                        'cmd' not in col_lower and  # Exclude command columns like pitch_cmd
+                        'goal' not in col_lower and # Exclude goal columns like pitch_goal
+                        'fin' not in col_lower):    # Exclude fin position columns like pitch_fin_pos
+                        found_col = col
+                        break
+            
             if found_col:
+                log_message(f"Found {motion_col} column: '{found_col}'")
                 if found_col != motion_col:
                     df[motion_col] = df[found_col]
-                available_motion_cols.append(motion_col)
+                    log_message(f"  Mapped '{found_col}' -> '{motion_col}'")
+                
+                # Verify data quality for this motion column
+                motion_data = df[motion_col].dropna()
+                if len(motion_data) > 0:
+                    log_message(f"  {motion_col} data: {len(motion_data)} valid points, range [{motion_data.min():.2f}, {motion_data.max():.2f}], mean {motion_data.mean():.2f}")
+                    available_motion_cols.append(motion_col)
+                else:
+                    log_message(f"  Warning: {motion_col} column exists but contains no valid data")
+            else:
+                log_message(f"Motion column '{motion_col}' NOT found")
+                # Show potential matches for debugging
+                potential_matches = [col for col in df.columns if motion_col in col.lower()]
+                if potential_matches:
+                    log_message(f"  Potential matches found: {potential_matches}")
+        
+        log_message(f"Final available motion columns: {available_motion_cols}")
         
         # For heave, if not available, calculate from depth changes (approximation)
         if 'heave' not in available_motion_cols and 'depth' in df.columns:
@@ -1008,27 +1070,43 @@ class NavPlotter:
                 
                 # Format time axis if using datetime
                 if 'datetime' in df.columns:
-                    self._format_datetime_axis(ax, x_data)
+                    self._format_datetime_axis(ax, x_data, df)
         
         # Row 2: Motion histograms with statistics
         for i, motion in enumerate(['heave', 'pitch', 'roll']):
             if motion in available_motion_cols:
                 ax = plt.subplot2grid((5, 6), (2, i*2), colspan=2)
                 
-                # Calculate statistics
+                # Calculate statistics with robust handling
                 motion_data = df[motion].dropna()
-                min_val = motion_data.min()
-                max_val = motion_data.max()
-                mean_val = motion_data.mean()
-                std_val = motion_data.std()
+                if len(motion_data) == 0:
+                    log_message(f"Warning: No valid data for {motion} histogram")
+                    continue
                 
-                # Create histogram with better styling
-                n, bins, patches = ax.hist(motion_data, bins=50, alpha=0.7, 
-                                         color=motion_colors[motion]['hist'], 
-                                         edgecolor='black', linewidth=0.5)
+                try:
+                    min_val = motion_data.min()
+                    max_val = motion_data.max()
+                    mean_val = motion_data.mean()
+                    std_val = motion_data.std()
+                    
+                    # Verify we have valid statistics
+                    if pd.isna(min_val) or pd.isna(max_val) or pd.isna(mean_val) or pd.isna(std_val):
+                        log_message(f"Warning: Invalid statistics calculated for {motion}")
+                        stats_text = f'n: {len(motion_data)}\nData: Present\nStats: Error'
+                    else:
+                        log_message(f"Motion {motion} stats: min={min_val:.2f}, max={max_val:.2f}, mean={mean_val:.2f}, std={std_val:.2f}")
+                        stats_text = f'n: {len(motion_data)}\nMin: {min_val:.2f}\nMax: {max_val:.2f}\nMean: {mean_val:.2f}\nStd: {std_val:.2f}'
+                    
+                    # Create histogram with better styling
+                    n, bins, patches = ax.hist(motion_data, bins=50, alpha=0.7, 
+                                             color=motion_colors[motion]['hist'], 
+                                             edgecolor='black', linewidth=0.5)
+                    
+                except Exception as e:
+                    log_message(f"Error creating histogram for {motion}: {e}")
+                    stats_text = f'n: {len(motion_data)}\nError: {str(e)[:20]}'
                 
                 # Add statistics text with better formatting
-                stats_text = f'n: {len(motion_data)}\nMin: {min_val:.2f}\nMax: {max_val:.2f}\nMean: {mean_val:.2f}\nStd: {std_val:.2f}'
                 ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, 
                        verticalalignment='top', horizontalalignment='right',
                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'),
@@ -1193,20 +1271,32 @@ class NavPlotter:
         for i, motion in enumerate(available_motion_cols):
             ax = axes[i]
             
-            # Get motion data
+            # Get motion data - ensure we have valid data for both plotting and statistics
             motion_data = df[motion].dropna()
             if len(motion_data) == 0:
+                log_message(f"Warning: No valid data for {motion} - skipping plot")
                 continue
+            
+            log_message(f"Creating {motion} time series plot with {len(motion_data)} data points")
+            log_message(f"  {motion} range: {motion_data.min():.2f} to {motion_data.max():.2f}, mean: {motion_data.mean():.2f}")
+            
+            # Prepare x and y data for plotting - ensure they match in length
+            valid_indices = df[motion].notna()
+            plot_x_data = x_data[valid_indices] if hasattr(x_data, '__getitem__') else x_data
+            plot_y_data = df[motion][valid_indices]
             
             # Color by depth if available for enhanced visualization
             if depth_info is not None:
+                # Ensure depth scaling matches the valid data indices
+                plot_depth_scaled = depth_info['scaled'][valid_indices] if hasattr(depth_info['scaled'], '__getitem__') else depth_info['scaled']
+                
                 # Create depth-colored scatter plot with reversed viridis
-                points = ax.scatter(x_data, df[motion], c=depth_info['scaled'], 
+                points = ax.scatter(plot_x_data, plot_y_data, c=plot_depth_scaled, 
                                   cmap='viridis_r', s=2, alpha=0.8, vmin=0, vmax=1)
                 scatter_plots.append(points)
             else:
                 # Use solid line if no depth data
-                ax.plot(x_data, df[motion], color=motion_colors.get(motion, 'blue'), 
+                ax.plot(plot_x_data, plot_y_data, color=motion_colors.get(motion, 'blue'), 
                        linewidth=1, alpha=0.7)
             
             # Set labels and title
@@ -1214,8 +1304,23 @@ class NavPlotter:
             ax.set_title(f'{motion.capitalize()} Time Series', fontsize=12, pad=10)
             ax.grid(True, alpha=0.3)
             
-            # Add statistics text
-            stats_text = f'Mean: {motion_data.mean():.2f}\nStd: {motion_data.std():.2f}\nRange: [{motion_data.min():.2f}, {motion_data.max():.2f}]'
+            # Add statistics text with robust calculation
+            try:
+                mean_val = motion_data.mean()
+                std_val = motion_data.std()
+                min_val = motion_data.min()
+                max_val = motion_data.max()
+                
+                # Ensure we have valid statistics
+                if pd.isna(mean_val) or pd.isna(std_val) or pd.isna(min_val) or pd.isna(max_val):
+                    stats_text = f'Data: {len(motion_data)} points\nStatistics unavailable'
+                else:
+                    stats_text = f'Min: {min_val:.2f}\nMax: {max_val:.2f}\nMean: {mean_val:.2f}\nStd: {std_val:.2f}'
+                
+            except Exception as e:
+                log_message(f"Warning: Could not calculate statistics for {motion}: {e}")
+                stats_text = f'Data: {len(motion_data)} points\nStatistics error'
+            
             ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
                    verticalalignment='top', horizontalalignment='left',
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'),
@@ -1223,7 +1328,7 @@ class NavPlotter:
             
             # Format time axis if using datetime
             if 'datetime' in df.columns:
-                self._format_datetime_axis(ax, x_data)
+                self._format_datetime_axis(ax, plot_x_data, df)
         
         # Add shared colorbar spanning the entire right side
         if scatter_plots and depth_info is not None:
@@ -1310,7 +1415,7 @@ class NavPlotter:
         
         # Format time axis if using datetime
         if 'datetime' in df.columns:
-            self._format_datetime_axis(plt.gca(), x_data)
+            self._format_datetime_axis(plt.gca(), x_data, df)
         
         # Add statistics box
         stats_lines = []
@@ -1375,9 +1480,18 @@ class NavPlotter:
             if 'datetime' in df.columns and not df['datetime'].isna().all():
                 x_data = df['datetime']
                 x_label = 'Mission Time'
-                # Format x-axis for time display
+                # Format x-axis for time display with appropriate tick intervals
                 plt.gca().xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%H:%M:%S'))
-                plt.gca().xaxis.set_major_locator(plt.matplotlib.dates.MinuteLocator(interval=1))
+                
+                # Determine appropriate tick interval based on data span
+                time_span = (df['datetime'].max() - df['datetime'].min()).total_seconds()
+                if time_span > 3600:  # More than 1 hour
+                    plt.gca().xaxis.set_major_locator(plt.matplotlib.dates.MinuteLocator(interval=10))
+                elif time_span > 1800:  # More than 30 minutes  
+                    plt.gca().xaxis.set_major_locator(plt.matplotlib.dates.MinuteLocator(interval=5))
+                else:
+                    plt.gca().xaxis.set_major_locator(plt.matplotlib.dates.MinuteLocator(interval=2))
+                
                 plt.xticks(rotation=45)
             else:
                 x_data = df.index
@@ -1427,7 +1541,7 @@ class NavPlotter:
             
             # Format time axis if using datetime
             if 'datetime' in df.columns:
-                self._format_datetime_axis(plt.gca(), x_data)
+                self._format_datetime_axis(plt.gca(), x_data, df)
             
             # Add statistics text
             motion_data = df[motion].dropna()
@@ -1499,7 +1613,7 @@ class NavPlotter:
                 x_data = df['datetime']
                 x_label = 'Mission Time'
                 # Use our custom formatting function
-                self._format_datetime_axis(plt.gca(), x_data)
+                self._format_datetime_axis(plt.gca(), x_data, df)
             else:
                 x_data = df.index
                 x_label = 'Time Index'
@@ -1645,7 +1759,7 @@ class NavPlotter:
                 
                 # Format time axis if using datetime
                 if 'datetime' in df.columns:
-                    self._format_datetime_axis(plt.gca(), x_data)
+                    self._format_datetime_axis(plt.gca(), x_data, df)
                 
                 # Add statistics
                 stats_text = f'n: {len(crab_data)}\nMean: {crab_data.mean():.2f}°\nStd: {crab_data.std():.2f}°\nRange: [{crab_data.min():.1f}°, {crab_data.max():.1f}°]'
@@ -1733,7 +1847,7 @@ class NavPlotter:
                 
                 # Format time axis if using datetime
                 if 'datetime' in df.columns:
-                    self._format_datetime_axis(plt.gca(), x_data)
+                    self._format_datetime_axis(plt.gca(), x_data, df)
                 
                 plot_path = os.path.join(output_dir, "Nav_Heading_vs_COG.png")
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
@@ -1785,7 +1899,7 @@ class NavPlotter:
                 
                 # Format time axis if using datetime
                 if 'datetime' in df.columns:
-                    self._format_datetime_axis(ax1, x_data)
+                    self._format_datetime_axis(ax1, x_data, df)
                 
                 # Create subplot for distribution
                 ax2 = plt.subplot(2, 1, 2)
@@ -1926,7 +2040,7 @@ class NavPlotter:
         
         # Format time axis if using datetime
         if use_datetime:
-            self._format_datetime_axis(plt.gca(), x_data)
+            self._format_datetime_axis(plt.gca(), x_data, df)
         
         # Invert y-axis so depth increases downward (oceanographic convention)
         plt.gca().invert_yaxis()
@@ -2017,27 +2131,82 @@ class NavPlotter:
             log_message(f"Error calculating crab index: {e}")
             return df
     
-    def _format_datetime_axis(self, ax, x_data):
-        """Format datetime axis to avoid excessive ticks"""
+    def _format_datetime_axis(self, ax, x_data, df=None):
+        """Format datetime axis to avoid excessive ticks and handle midnight crossover"""
         if hasattr(x_data, 'dtype') and 'datetime' in str(x_data.dtype):
             # Calculate appropriate time interval based on data span
             time_span = (x_data.max() - x_data.min()).total_seconds()
             
-            if time_span > 7200:  # More than 2 hours
-                # Use hourly ticks
-                ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=10))
-            elif time_span > 1800:  # More than 30 minutes
-                # Use 10-minute ticks
-                ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=10))
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=2))
+            # Check if midnight crossover was detected during data processing
+            crosses_midnight = False
+            if df is not None and hasattr(df, 'attrs') and 'midnight_crossover' in df.attrs:
+                crosses_midnight = df.attrs['midnight_crossover']
             else:
-                # Use 5-minute ticks for shorter spans
-                ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=1))
+                # Fallback: check if mission crosses midnight by looking at duration and time patterns
+                mission_start = x_data.min()
+                mission_end = x_data.max()
+                
+                # Extract time-of-day from start and end
+                start_time_of_day = mission_start.hour * 3600 + mission_start.minute * 60 + mission_start.second
+                end_time_of_day = mission_end.hour * 3600 + mission_end.minute * 60 + mission_end.second
+                
+                # Check multiple conditions for midnight crossover:
+                # 1. Mission duration > 6 hours AND end time of day < start time of day
+                # 2. OR mission duration > 18 hours (clearly spans midnight)
+                crosses_midnight = (
+                    (time_span > 6 * 3600 and end_time_of_day < start_time_of_day) or
+                    (time_span > 18 * 3600)
+                )
+            
+            if crosses_midnight:
+                # For missions crossing midnight, use custom time-from-start formatting
+                self.log_message("Mission spans midnight - using time-from-start formatting")
+                
+                # Create custom formatter for time since mission start
+                mission_start = x_data.min()
+                
+                def time_from_start_formatter(x, pos):
+                    """Custom formatter showing time from mission start"""
+                    try:
+                        dt = mdates.num2date(x)
+                        elapsed = (dt - mission_start).total_seconds()
+                        hours = int(elapsed // 3600)
+                        minutes = int((elapsed % 3600) // 60)
+                        return f"T+{hours:02d}:{minutes:02d}"
+                    except:
+                        return ""
+                
+                # Use different intervals based on mission duration
+                if time_span > 4 * 3600:  # More than 4 hours
+                    # Use hourly ticks
+                    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+                    ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=15))
+                else:
+                    # Use 30-minute ticks
+                    ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=30))
+                    ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=10))
+                
+                # Apply the custom formatter
+                ax.xaxis.set_major_formatter(FuncFormatter(time_from_start_formatter))
+                
+            else:
+                # Standard time-of-day formatting for missions within a single day
+                if time_span > 7200:  # More than 2 hours
+                    # Use hourly ticks
+                    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                    ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=10))
+                elif time_span > 1800:  # More than 30 minutes
+                    # Use 10-minute ticks
+                    ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=10))
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                    ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=2))
+                else:
+                    # Use 5-minute ticks for shorter spans
+                    ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                    # Use 2-minute minor ticks to avoid generating too many ticks
+                    ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=2))
             
             # Rotate labels to prevent overlap
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
@@ -2228,307 +2397,47 @@ class NavPlotter:
                 
                 log_message(f"  Severe crabbing (>10°): {severe_crab} points ({severe_crab/len(crab_data)*100:.1f}%)")
                 log_message(f"  Moderate crabbing (5-10°): {moderate_crab} points ({moderate_crab/len(crab_data)*100:.1f}%)")
-
-    def _load_phins_ins_text(self, file_path):
+    
+    def process_navigation_directory(self, nav_directory, output_dir, dive_name="Navigation", log_callback=None):
         """
-        Load PHINS INS text file and extract relevant navigation data
+        Process a directory containing navigation files and create plots
         
-        :param file_path: Path to PHINS INS text file
-        :return: Dictionary containing parsed data frames
+        :param nav_directory: Path to directory containing navigation files
+        :param output_dir: Directory to save the plots
+        :param dive_name: Name for the dive (used in filenames)
+        :param log_callback: Optional callback function for logging messages to GUI (overrides constructor callback)
         """
+        # Use provided callback or fall back to stored callback
+        active_callback = log_callback or self.log_callback
+        
+        def log_message(message):
+            print(message)
+            if active_callback:
+                active_callback(message)
+        
         try:
-            print(f"Attempting to load PHINS INS text file: {file_path}")
+            log_message(f"Processing navigation directory: {nav_directory}")
             
-            df = None
-            
-            # Try the simple CSV read first with comma separator (most common for PHINS INS files)
-            try:
-                df = pd.read_csv(file_path, sep=',', encoding='utf-8', low_memory=False)
-                # Clean column names (remove trailing spaces and commas)
-                df.columns = [col.strip(' ,') for col in df.columns]
-                
-                # Remove any completely empty columns
-                df = df.dropna(axis=1, how='all')
-                
-                # Check if we have meaningful data
-                if len(df.columns) > 3 and len(df) > 100:
-                    print(f"Successfully parsed CSV with comma separator, shape={df.shape}")
-                    print(f"Columns: {list(df.columns)}")
-                else:
-                    print(f"CSV parsing gave insufficient data: {df.shape}")
-                    df = None
-                    
-            except Exception as e:
-                print(f"Standard CSV parsing failed: {e}")
-                df = None
-            
-            # If CSV parsing fails, try alternative approaches
-            if df is None:
-                # Try different encodings and separators
-                encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-                separators = ['\t', ',', ';', ' ', None]
-                
-                for encoding in encodings:
-                    for sep in separators:
-                        try:
-                            df = pd.read_csv(file_path, sep=sep, encoding=encoding, engine='python', low_memory=False)
-                            if df is not None and len(df.columns) > 1 and len(df) > 0:
-                                print(f"Successfully parsed with encoding={encoding}, separator='{sep}', shape={df.shape}")
-                                break
-                        except Exception as e:
-                            continue
-                    if df is not None and len(df.columns) > 1:
-                        break
-            
-            
-            # If all parsing methods still fail, try manual text parsing
-            if df is None or len(df.columns) <= 1:
-                print("All CSV parsing methods failed, attempting manual text parsing...")
-                
-                for encoding in ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
-                    try:
-                        with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
-                            lines = f.readlines()
-                        break
-                    except:
-                        continue
-                
-                if 'lines' not in locals():
-                    raise ValueError("Could not read file with any encoding")
-                
-                # Look for patterns that might indicate data format
-                data_rows = []
-                headers = None
-                header_found = False
-                
-                # Look through the first portion of the file for headers and data
-                for i, line in enumerate(lines):
-                    line = line.strip()
-                    if not line or line.startswith('#') or line.startswith('//') or line.startswith('%'):
-                        continue
-                    
-                    # Try to split by common delimiters
-                    best_parts = []
-                    best_delim = None
-                    for delim in [',', '\t', ';', ' ']:
-                        parts = [p.strip() for p in line.split(delim) if p.strip()]
-                        if len(parts) > len(best_parts):
-                            best_parts = parts
-                            best_delim = delim
-                    
-                    if len(best_parts) > 3:  # Likely a meaningful row
-                        # Check if this could be headers (contains text keywords)
-                        contains_keywords = any(keyword.lower() in line.lower() for keyword in 
-                                              ['time', 'lat', 'lon', 'head', 'pitch', 'roll', 'heave', 'phins', 'x', 'y', 'z'])
-                        
-                        # Check if this could be numeric data
-                        numeric_count = 0
-                        for part in best_parts:
-                            try:
-                                float(part.replace(':', '').replace('/', ''))
-                                numeric_count += 1
-                            except:
-                                pass
-                        
-                        is_mostly_numeric = numeric_count >= len(best_parts) * 0.7
-                        
-                        if contains_keywords and not header_found and not is_mostly_numeric:
-                            headers = best_parts
-                            header_found = True
-                            print(f"Found headers at line {i+1}: {headers}")
-                        elif is_mostly_numeric:
-                            # Try to parse as numeric data - REMOVE THE 1000 ROW LIMIT
-                            try:
-                                numeric_row = []
-                                for part in best_parts:
-                                    # Handle time formats specially
-                                    if ':' in part and len(part.split(':')) >= 2:
-                                        numeric_row.append(part)  # Keep time as string
-                                    elif '/' in part and len(part.split('/')) >= 2:
-                                        numeric_row.append(part)  # Keep date as string
-                                    else:
-                                        numeric_row.append(float(part))
-                                
-                                data_rows.append(numeric_row)
-                                
-                                # Log progress every 5000 rows
-                                if len(data_rows) % 5000 == 0:
-                                    print(f"Processed {len(data_rows)} data rows...")
-                                    
-                            except:
-                                continue
-                
-                # Create DataFrame from parsed data
-                if data_rows:
-                    print(f"Found {len(data_rows)} data rows")
-                    
-                    # Ensure all rows have the same length
-                    max_cols = max(len(row) for row in data_rows)
-                    normalized_rows = []
-                    for row in data_rows:
-                        if len(row) < max_cols:
-                            row.extend([None] * (max_cols - len(row)))
-                        normalized_rows.append(row[:max_cols])
-
-                    if headers and len(headers) == max_cols:
-                        df = pd.DataFrame(normalized_rows, columns=headers)
-                        print(f"Created DataFrame with headers, shape: {df.shape}")
-                    else:
-                        # Generate generic column names
-                        df = pd.DataFrame(normalized_rows, columns=[f'col_{i}' for i in range(max_cols)])
-                        print(f"Created DataFrame with generic headers, shape: {df.shape}")
-                else:
-                    print("No valid data rows found")
+            # Scan directory and merge navigation data
+            df = self.nav_merger.merge_navigation_directory(nav_directory, active_callback)
             
             if df is None or df.empty:
-                print(f"Warning: Could not parse PHINS INS file: {file_path}")
-                return {}
+                raise ValueError("Failed to merge navigation data from directory")
             
-            # Clean column names
-            df.columns = [str(col).strip(' ,') for col in df.columns]
-            print(f"Final DataFrame shape: {df.shape}, columns: {list(df.columns)}")
+            log_message(f"Successfully merged navigation data: {len(df)} data points")
             
-            # Create data dictionary similar to what read_unique_identifiers would return
-            data_dict = {}
+            # Create comprehensive navigation plots
+            self.create_nav_plots(df, output_dir, dive_name, active_callback)
             
-            # Try to identify and extract heave data - handle both legacy and current formats
-            heave_cols = []
-            for col in df.columns:
-                col_str = str(col).lower()
-                # Look for both 'heave' (legacy) and 'phins_heave' (current) formats
-                if 'heave' in col_str and ('phins' in col_str or col_str == 'heave'):
-                    heave_cols.append(col)
-        
-            if heave_cols:
-                print(f"Found heave columns: {heave_cols}")
-                # Prioritize 'phins_heave' over 'heave' if both exist
-                heave_col = None
-                for col in heave_cols:
-                    if 'phins_heave' in str(col).lower():
-                        heave_col = col
-                        break
-                if heave_col is None:
-                    # Fall back to first heave column found
-                    heave_col = heave_cols[0]
-                
-                print(f"Using heave column: '{heave_col}'")
-                
-                # Look for time columns - handle both legacy and current formats
-                time_cols = []
-                for col in df.columns:
-                    col_str = str(col).lower()
-                    if any(time_word in col_str for time_word in ['time', 'timestamp', 'utc', 'gps_time', 'phins_time']):
-                        time_cols.append(col)
-                
-                # Create heave DataFrame
-                if time_cols:
-                    # Prioritize 'phins_time' over other time columns if it exists
-                    time_col = None
-                    for col in time_cols:
-                        if 'phins_time' in str(col).lower():
-                            time_col = col
-                            break
-                    if time_col is None:
-                        # Fall back to first time column found
-                        time_col = time_cols[0]
-                    
-                    print(f"Using time column: '{time_col}'")
-                    
-                    heave_data = df[[heave_col, time_col]].copy()
-                    heave_data = heave_data.dropna()
-                    
-                    # Convert heave to numeric
-                    heave_data[heave_col] = pd.to_numeric(heave_data[heave_col], errors='coerce')
-                    heave_data = heave_data.dropna()
-                    
-                    if len(heave_data) > 0:
-                        heave_dict = {
-                            'Heave': heave_data[heave_col].tolist(),
-                            'Time_REF': heave_data[time_col].astype(str).tolist()
-                        }
-                        data_dict['HEAVE_'] = pd.DataFrame(heave_dict)
-                        print(f"Created HEAVE_ DataFrame with {len(heave_dict['Heave'])} points using '{heave_col}' and '{time_col}'")
-                else:
-                    # No time column found, use index as time reference
-                    heave_data = df[[heave_col]].copy()
-                    heave_data = heave_data.dropna()
-                    
-                    # Convert heave to numeric
-                    heave_data[heave_col] = pd.to_numeric(heave_data[heave_col], errors='coerce')
-                    heave_data = heave_data.dropna()
-                    
-                    if len(heave_data) > 0:
-                        heave_dict = {
-                            'Heave': heave_data[heave_col].tolist(),
-                            'Time_REF': [f"idx_{i}" for i in range(len(heave_data))]
-                        }
-                        data_dict['HEAVE_'] = pd.DataFrame(heave_dict)
-                        print(f"Created HEAVE_ DataFrame with {len(heave_dict['Heave'])} points using '{heave_col}' (index-based time)")
+            # Analyze navigation quality
+            self.analyze_nav_quality(df, active_callback)
             
-            # Try to extract other relevant motion data (pitch, roll, etc.) - handle both legacy and current formats
-            attitude_cols = []
-            for motion in ['pitch', 'roll', 'heading', 'yaw']:
-                motion_cols = []
-                for col in df.columns:
-                    col_str = str(col).lower()
-                    # Look for both legacy format (e.g., 'pitch') and current format (e.g., 'phins_pitch')
-                    if motion in col_str and 'rate' not in col_str and 'std' not in col_str:
-                        motion_cols.append(col)
-                
-                if motion_cols:
-                    # Prioritize 'phins_' prefixed columns over legacy columns
-                    selected_col = None
-                    for col in motion_cols:
-                        if f'phins_{motion}' in str(col).lower():
-                            selected_col = col
-                            break
-                    if selected_col is None:
-                        # Fall back to first match
-                        selected_col = motion_cols[0]
-                    
-                    attitude_cols.append(selected_col)
-                    print(f"Selected {motion} column: '{selected_col}' from options: {motion_cols}")
-            
-            if attitude_cols:
-                print(f"Found attitude columns: {attitude_cols}")
-                
-                # Look for time columns again
-                time_cols = []
-                for col in df.columns:
-                    col_str = str(col).lower()
-                    if any(time_word in col_str for time_word in ['time', 'timestamp', 'utc', 'gps_time', 'phins_time']):
-                        time_cols.append(col)
-                
-                if time_cols:
-                    # Prioritize 'phins_time' over other time columns
-                    time_col = None
-                    for col in time_cols:
-                        if 'phins_time' in str(col).lower():
-                            time_col = col
-                            break
-                    if time_col is None:
-                        time_col = time_cols[0]
-                    
-                    attitude_data = df[attitude_cols + [time_col]].copy()
-                    attitude_data = attitude_data.dropna()
-                    
-                    if len(attitude_data) > 0:
-                        attitude_dict = {'Time_REF': attitude_data[time_col].astype(str).tolist()}
-                        
-                        for col in attitude_cols:
-                            try:
-                                attitude_dict[col.capitalize()] = pd.to_numeric(attitude_data[col], errors='coerce').tolist()
-                            except:
-                                attitude_dict[col.capitalize()] = attitude_data[col].tolist()
-                        
-                        data_dict['ATITUD'] = pd.DataFrame(attitude_dict)
-                        print(f"Created ATITUD DataFrame with {len(attitude_dict['Time_REF'])} points")
-            
-            print(f"Successfully parsed PHINS file. Found data types: {list(data_dict.keys())}")
-            return data_dict
+            log_message("Navigation plotting and analysis completed")
+            return True  # Indicate success
             
         except Exception as e:
-            print(f"Error loading PHINS INS text file: {e}")
+            error_msg = f"Error processing navigation directory: {str(e)}"
+            log_message(error_msg)
             import traceback
             traceback.print_exc()
-            return {}
+            return False  # Indicate failure

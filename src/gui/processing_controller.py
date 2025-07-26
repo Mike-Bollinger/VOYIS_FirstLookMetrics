@@ -158,29 +158,17 @@ class ProcessingController:
                 self.log_message("Processing Imagery data...")
                 self.log_message("       ⚠ Note: All modules now use CSV-based processing for consistency")
                 
-                # Load navigation data from dive nav text file ONLY for imagery
-                nav_file = None
-                # Only use nav_path for imagery processing (Dive Nav text file)
-                if hasattr(self, 'nav_path') and self.nav_path.get():
-                    file_path = self.nav_path.get()
-                    if file_path and os.path.exists(file_path):
-                        nav_file = file_path
-                        self.log_message(f"       Navigation source for imagery: {os.path.basename(nav_file)} (Dive Nav text file)")
-                    else:
-                        self.log_message(f"       ⚠ Dive Nav text file not found: {file_path}")
-                else:
-                    self.log_message("       ⚠ No Dive Nav text file specified for imagery processing")
+                # For imagery processing, use the same navigation directory as navigation plots
+                # This ensures consistency across all processing modules
+                nav_directory = self.nav_directory_path.get() if hasattr(self, 'nav_directory_path') else None
                 
-                if nav_file:
-                    try:
-                        if self.load_navigation_data_for_imagery_only(nav_file):
-                            self.log_message("✓ Navigation data loaded successfully from text file for imagery processing")
-                        else:
-                            self.log_message("⚠ Navigation data load failed - continuing without it")
-                    except Exception as nav_error:
-                        self.log_message(f"⚠ Navigation data error: {nav_error}")
+                if nav_directory and os.path.exists(nav_directory):
+                    self.log_message(f"       Navigation source for imagery: Directory {nav_directory}")
+                    # The imagery processing will automatically use the merged navigation data
+                    # from the same directory used for navigation plots
+                    self.log_message("✓ Navigation directory available for imagery processing")
                 else:
-                    self.log_message("⚠ No navigation file specified - continuing without navigation data")
+                    self.log_message("⚠ No navigation directory specified - continuing without navigation data")
                 
                 # IMPORTANT: Process basic metrics FIRST to populate GPS data
                 try:
@@ -352,30 +340,28 @@ class ProcessingController:
         """Process navigation data for plotting using nav_plotter.py"""
         self.log_message("STAGE 1: Processing Navigation data for plotting...")
         
-        # Get navigation files
-        nav_file = self.nav_plot_file_path.get()  # NAV_STATE.txt file
-        phins_file = self.phins_ins_path.get()    # PHINS INS file (optional, for navigation plotting)
-        
-        if not nav_file or not os.path.exists(nav_file):
-            self.log_message("⚠ Navigation file not specified or doesn't exist. Skipping navigation plotting.")
-            self.log_message("   Please select a NAV_STATE.txt file for navigation plotting")
-            return
-        
-        self.log_message(f"       Using navigation file: {os.path.basename(nav_file)}")
-        if phins_file and os.path.exists(phins_file):
-            self.log_message(f"       Using PHINS file: {os.path.basename(phins_file)}")
-        
         try:
             from src.models.nav_plotter import NavPlotter
             
             # Create nav plotter instance
             nav_plotter = NavPlotter(log_callback=self.log_message)
             
-            # Process navigation data
-            success = nav_plotter.process_navigation_data(
-                nav_file=nav_file,
-                output_folder=output_folder,
-                phins_file=phins_file if phins_file and os.path.exists(phins_file) else None
+            # Directory mode (the only mode now - automatic file discovery)
+            nav_directory = self.nav_directory_path.get()
+            
+            if not nav_directory or not os.path.exists(nav_directory):
+                self.log_message("⚠ Navigation directory not specified or doesn't exist. Skipping navigation plotting.")
+                self.log_message("   Please select a directory containing navigation files")
+                return
+            
+            self.log_message(f"       Using navigation directory: {nav_directory}")
+            
+            # Process using directory method
+            success = nav_plotter.process_navigation_directory(
+                nav_directory=nav_directory,
+                output_dir=output_folder,
+                dive_name="Navigation",
+                log_callback=self.log_message
             )
             
             if success:
@@ -485,7 +471,6 @@ class ProcessingController:
                 self.phins_nav_path.set(saved_paths.get('phins_nav_path', ''))
                 nav_plot_path = saved_paths.get('nav_plot_file_path', '')
                 self.nav_plot_file_path.set(nav_plot_path)
-                self.nav_state_file_path.set(nav_plot_path)  # Keep synchronized
                 self.phins_ins_path.set(saved_paths.get('phins_ins_path', ''))
         except Exception as e:
             self.log_message(f"Error restoring paths: {e}")
@@ -937,24 +922,18 @@ class ProcessingController:
                     # Set up job-specific paths using standardized column names
                     input_folder = str(row.get('Image_Input', '')).strip() if pd.notna(row.get('Image_Input', '')) else ''
                     output_folder = str(row.get('Output_folder', '')).strip() if pd.notna(row.get('Output_folder', '')) else ''
-                    nav_file = str(row.get('Dive_Nav_file', '')).strip() if pd.notna(row.get('Dive_Nav_file', '')) else ''
+                    nav_directory = str(row.get('nav_directory', '')).strip() if pd.notna(row.get('nav_directory', '')) else ''
+                    dive_nav_file = str(row.get('dive_nav_file', '')).strip() if pd.notna(row.get('dive_nav_file', '')) else ''
                     lls_folder = str(row.get('LLS_Input', '')).strip() if pd.notna(row.get('LLS_Input', '')) else ''
                     phins_nav_file = str(row.get('PhinsData_Bin_file', '')).strip() if pd.notna(row.get('PhinsData_Bin_file', '')) else ''
-                    phins_data_nav_file = str(row.get('PhinsData_Nav_file', '')).strip() if pd.notna(row.get('PhinsData_Nav_file', '')) else ''
-                    
-                    # Navigation module files
-                    nav_state_file = str(row.get('NAV_STATE_file', '')).strip() if pd.notna(row.get('NAV_STATE_file', '')) else ''
-                    phins_ins_file = str(row.get('PHINS_INS_file', '')).strip() if pd.notna(row.get('PHINS_INS_file', '')) else ''
                     
                     # Convert empty strings to None for cleaner logic
                     input_folder = input_folder if input_folder else None
                     output_folder = output_folder if output_folder else None
-                    nav_file = nav_file if nav_file else None
+                    nav_directory = nav_directory if nav_directory else None
+                    dive_nav_file = dive_nav_file if dive_nav_file else None
                     lls_folder = lls_folder if lls_folder else None
                     phins_nav_file = phins_nav_file if phins_nav_file else None
-                    phins_data_nav_file = phins_data_nav_file if phins_data_nav_file else None
-                    nav_state_file = nav_state_file if nav_state_file else None
-                    phins_ins_file = phins_ins_file if phins_ins_file else None
                     
                     # Validate required paths - only output is always required
                     if not output_folder:
@@ -963,13 +942,13 @@ class ProcessingController:
                         continue
                     
                     # Check if we have inputs for at least one processing module
-                    has_nav_module = nav_state_file  # Navigation module needs NAV_STATE_file
+                    has_nav_module = nav_directory  # Navigation module needs nav_directory
                     has_image_module = input_folder
                     has_lls_module = lls_folder and phins_nav_file
                     
                     if not (has_nav_module or has_image_module or has_lls_module):
                         self.log_message(f"Job {job_num}: Skipping - no valid processing module inputs specified")
-                        self.log_message(f"  Navigation module needs: NAV_STATE_file")
+                        self.log_message(f"  Navigation module needs: nav_directory")
                         self.log_message(f"  Image module needs: Image_Input")
                         self.log_message(f"  LLS module needs: LLS_Input and PhinsData_Bin_file")
                         failed_jobs += 1
@@ -991,8 +970,7 @@ class ProcessingController:
                     # Process this job
                     self.process_single_batch_job(
                         job_num, input_folder, output_folder, 
-                        nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
-                        nav_state_file, phins_ins_file
+                        nav_directory, dive_nav_file, lls_folder, phins_nav_file
                     )
                     
                     self.log_message(f"Job {job_num} completed successfully")
@@ -1023,8 +1001,7 @@ class ProcessingController:
             self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
 
     def process_single_batch_job(self, job_num, input_folder, output_folder, 
-                                nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
-                                nav_state_file, phins_ins_file):
+                                nav_directory, dive_nav_file, lls_folder, phins_nav_file):
         """Process a single job from the batch CSV - mirrors single dive processing"""
         
         # Determine what processing is needed
@@ -1042,17 +1019,13 @@ class ProcessingController:
         self.log_message(f"Job {job_num} processing:")
         if nav_selected:
             self.log_message(f"  - Navigation processing: ENABLED")
-            if nav_state_file:
-                self.log_message(f"  - Nav state file: {nav_state_file}")
-            if phins_ins_file:
-                self.log_message(f"  - PHINS INS file: {phins_ins_file}")
+            if nav_directory:
+                self.log_message(f"  - Navigation directory: {nav_directory}")
         if lls_selected:
             self.log_message(f"  - LLS folder: {lls_folder}")
             self.log_message(f"  - Phins nav: {phins_nav_file}")
         if imagery_selected:
             self.log_message(f"  - Input folder: {input_folder}")
-            if nav_file and os.path.exists(nav_file):
-                self.log_message(f"  - Nav file: {nav_file}")
         self.log_message(f"  - Output folder: {output_folder}")
         
         if not nav_selected and not lls_selected and not imagery_selected:
@@ -1066,10 +1039,8 @@ class ProcessingController:
             # Set paths for this job
             if imagery_selected:
                 self.input_path.set(input_folder if input_folder else '')
-                self.nav_path.set(nav_file if nav_file and os.path.exists(nav_file) else '')
             else:
                 self.input_path.set('')
-                self.nav_path.set('')
             
             if lls_selected:
                 self.lls_path.set(lls_folder if lls_folder else '')
@@ -1079,12 +1050,10 @@ class ProcessingController:
                 self.phins_nav_path.set('')
                 
             if nav_selected:
-                self.nav_plot_file_path.set(nav_state_file if nav_state_file and os.path.exists(nav_state_file) else '')
-                # Set PHINS INS file path for navigation processing (separate from LLS)
-                self.phins_ins_path.set(phins_ins_file if phins_ins_file and os.path.exists(phins_ins_file) else '')
+                # Use the new navigation directory approach
+                self.nav_directory_path.set(nav_directory if nav_directory else '')
             else:
-                self.nav_plot_file_path.set('')
-                self.phins_ins_path.set('')
+                self.nav_directory_path.set('')
                 
             self.output_path.set(output_folder)
             
@@ -1122,26 +1091,25 @@ class ProcessingController:
                     else:
                         # Mirror the single processing structure exactly
                         self.log_message(f"Job {job_num}: Processing Imagery data...")
-                        self.log_message(f"Job {job_num}: ⚠ Note: All modules now use CSV-based processing for consistency")
                         
-                        # Load navigation data from dive nav text file ONLY for imagery
-                        nav_file_for_imagery = None
-                        if nav_file and os.path.exists(nav_file):
-                            nav_file_for_imagery = nav_file
-                            self.log_message(f"Job {job_num}: Navigation source for imagery: {os.path.basename(nav_file_for_imagery)} (Dive Nav text file)")
+                        # For imagery processing, use dive_nav_file if provided, otherwise use nav_directory
+                        nav_source = None
+                        if dive_nav_file and os.path.exists(dive_nav_file):
+                            self.log_message(f"Job {job_num}: Navigation source for imagery: Individual file {dive_nav_file}")
+                            nav_source = dive_nav_file
+                            # Set the dive nav file for imagery processing
+                            self.phins_nav_path.set(dive_nav_file)
+                        elif nav_directory and os.path.exists(nav_directory):
+                            self.log_message(f"Job {job_num}: Navigation source for imagery: Directory {nav_directory}")
+                            nav_source = nav_directory
+                            # Use nav_directory for imagery navigation data as well
+                            # The imagery processing will use the existing navigation merger logic
+                            # to automatically find the best navigation file in the directory
                         else:
-                            self.log_message(f"Job {job_num}: ⚠ No Dive Nav text file specified for imagery processing")
+                            self.log_message(f"Job {job_num}: ⚠ No navigation data specified - continuing without navigation data")
                         
-                        if nav_file_for_imagery:
-                            try:
-                                if self.load_navigation_data_for_imagery_only(nav_file_for_imagery):
-                                    self.log_message(f"Job {job_num}: ✓ Navigation data loaded successfully from text file for imagery processing")
-                                else:
-                                    self.log_message(f"Job {job_num}: ⚠ Navigation data load failed - continuing without it")
-                            except Exception as nav_error:
-                                self.log_message(f"Job {job_num}: ⚠ Navigation data error: {nav_error}")
-                        else:
-                            self.log_message(f"Job {job_num}: ⚠ No navigation file specified - continuing without navigation data")
+                        if nav_source:
+                            self.log_message(f"Job {job_num}: ✓ Navigation source available for imagery processing")
                         
                         # Call the main imagery processing method
                         self.analyze_images(input_folder, output_folder)
@@ -1224,15 +1192,42 @@ class ProcessingController:
             
             # Validate Navigation processing inputs
             if nav_selected:
-                nav_file = self.nav_plot_file_path.get().strip()
+                nav_mode = self.nav_merge_mode.get()
                 
-                if not nav_file:
-                    self.log_message("❌ Error: Navigation processing selected but no navigation file specified")
-                    return False
-                
-                if not os.path.exists(nav_file):
-                    self.log_message(f"❌ Error: Navigation file does not exist: {nav_file}")
-                    return False
+                if nav_mode == 'directory':
+                    # Directory mode validation
+                    nav_directory = self.nav_directory_path.get().strip()
+                    
+                    if not nav_directory:
+                        self.log_message("❌ Error: Navigation processing selected but no navigation directory specified")
+                        self.log_message("   Please select a directory containing navigation files")
+                        return False
+                    
+                    if not os.path.exists(nav_directory):
+                        self.log_message(f"❌ Error: Navigation directory does not exist: {nav_directory}")
+                        return False
+                    
+                    if not os.path.isdir(nav_directory):
+                        self.log_message(f"❌ Error: Navigation path is not a directory: {nav_directory}")
+                        return False
+                    
+                    # Quick check if directory contains any potential navigation files
+                    try:
+                        from src.models.nav_merger import scan_navigation_directory
+                        nav_files = scan_navigation_directory(nav_directory)
+                        
+                        if not nav_files:
+                            self.log_message("❌ Error: No valid navigation files found in selected directory")
+                            self.log_message(f"   Directory: {nav_directory}")
+                            self.log_message("   Expected files: PHINS INS, NAV_STATE, STATE, ADCP, or *_Veh_Data files")
+                            return False
+                        
+                        file_types = list(nav_files.keys())
+                        self.log_message(f"✅ Navigation directory contains: {', '.join(file_types).upper()}")
+                        
+                    except Exception as e:
+                        self.log_message(f"❌ Error: Could not scan navigation directory: {e}")
+                        return False
             
             # Validate LLS processing inputs
             if lls_selected:
@@ -1352,7 +1347,7 @@ class ProcessingController:
                 
                 # Check required columns
                 required_columns = ['Output_folder']
-                optional_columns = ['Image_Input', 'Dive_Nav_file', 'LLS_Input', 'PhinsData_Bin_file']
+                optional_columns = ['Image_Input', 'dive_nav_file', 'LLS_Input', 'PhinsData_Bin_file']
                 
                 missing_required = [col for col in required_columns if col not in df.columns]
                 if missing_required:
