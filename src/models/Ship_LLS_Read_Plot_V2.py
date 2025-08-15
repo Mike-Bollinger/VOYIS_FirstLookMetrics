@@ -9,6 +9,7 @@ from scipy.stats import gaussian_kde
 import glob
 from scipy.interpolate import interp1d
 import matplotlib.dates as mdates
+import traceback
 from models import read_phinsdata as phins
 
     
@@ -117,41 +118,92 @@ def process_xyz_file(file_path, file_number, radius, min_intensity_threshold, ba
         if log_callback:
             log_callback(message)
 
-    data = pd.read_csv(file_path, delimiter=',', dtype=float).to_numpy()
-    # try:
-    #     data = pd.read_csv(file_path, delimiter=',', dtype=float).to_numpy()
-    # except ValueError:
-    #     df = pd.read_csv(file_path, delimiter=',', low_memory=False)
-    #     # Convert all columns to numeric, replacing non-numeric with NaN
-    #     df = df.apply(pd.to_numeric, errors='coerce')
-    #     data = df.to_numpy()
-
-    unique_times = np.unique(data[:,0])
-    time_diff = np.diff(unique_times).mean()
-    unique_times_dt = [datetime.datetime.fromtimestamp(t / 1000000, tz=datetime.timezone.utc) 
-                      for t in unique_times]
-    Valid_Data_Mask = np.zeros((data.shape[0], 2), dtype=int)
+    # First, check if file exists and has content
+    if not os.path.exists(file_path):
+        log_message(f"Warning: File does not exist, skipping: {file_path}")
+        return []
     
-    # Get IMU data
-    df_imu_nav = pd.DataFrame()
-    df_imu_nav['Date_Time'] = unique_times_dt
-    df_imu_nav = phins.add_IMU_NAV(df_imu_nav, vehicle_dir)
+    # Check file size
+    file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        log_message(f"Warning: File is empty (0 bytes), skipping: {os.path.basename(file_path)}")
+        return []
+    
+    if file_size < 50:  # Files smaller than 50 bytes are likely invalid
+        log_message(f"Warning: File is too small ({file_size} bytes), skipping: {os.path.basename(file_path)}")
+        return []
 
-    # Process each timestamp
-    rows = []
-    for i in range(len(unique_times)):
-        time_index = np.where(data[:,0] == unique_times[i])[0]
-        row,Valid_Data_Mask = process_timestamp_data(data, time_index, unique_times[i], file_number, 
-                                   file_path, df_imu_nav, i, radius, 
-                                   min_intensity_threshold, bad_point_threshold,Valid_Data_Mask,time_diff)
-        rows.append(row)
+    try:
+        # Try to read the file with error handling
+        data = pd.read_csv(file_path, delimiter=',', dtype=float).to_numpy()
+        
+        # Check if data is actually loaded and has the expected structure
+        if data is None or data.size == 0:
+            log_message(f"Warning: File contains no data, skipping: {os.path.basename(file_path)}")
+            return []
+        
+        # Check if data has the expected number of columns (should be at least 5: time, x, y, z, intensity)
+        if data.shape[1] < 5:
+            log_message(f"Warning: File has insufficient columns ({data.shape[1]} < 5), skipping: {os.path.basename(file_path)}")
+            return []
+        
+        # Check if we have any valid rows
+        if data.shape[0] == 0:
+            log_message(f"Warning: File has no data rows, skipping: {os.path.basename(file_path)}")
+            return []
+            
+    except pd.errors.EmptyDataError:
+        log_message(f"Warning: File is empty or has no columns to parse, skipping: {os.path.basename(file_path)}")
+        return []
+    except pd.errors.ParserError as e:
+        log_message(f"Warning: File parsing error, skipping: {os.path.basename(file_path)} - {str(e)}")
+        return []
+    except Exception as e:
+        log_message(f"Warning: Unexpected error reading file, skipping: {os.path.basename(file_path)} - {str(e)}")
+        return []
 
-    # replace LLS_ with Mask_
-    file_path_Mask = file_path.replace('LLS_', 'Mask_')
-    np.savetxt(file_path_Mask, Valid_Data_Mask, delimiter=',', fmt='%d')
-    print(f"Processed {len(rows)} timestamps from file {file_path}")
+    try:
+        unique_times = np.unique(data[:,0])
+        
+        # Check if we have any valid timestamps
+        if len(unique_times) == 0:
+            log_message(f"Warning: File has no valid timestamps, skipping: {os.path.basename(file_path)}")
+            return []
+        
+        time_diff = np.diff(unique_times).mean() if len(unique_times) > 1 else 0
+        unique_times_dt = [datetime.datetime.fromtimestamp(t / 1000000, tz=datetime.timezone.utc) 
+                          for t in unique_times]
+        Valid_Data_Mask = np.zeros((data.shape[0], 2), dtype=int)
+        
+        # Get IMU data
+        df_imu_nav = pd.DataFrame()
+        df_imu_nav['Date_Time'] = unique_times_dt
+        df_imu_nav = phins.add_IMU_NAV(df_imu_nav, vehicle_dir)
 
-    return rows
+        # Process each timestamp
+        rows = []
+        for i in range(len(unique_times)):
+            time_index = np.where(data[:,0] == unique_times[i])[0]
+            row,Valid_Data_Mask = process_timestamp_data(data, time_index, unique_times[i], file_number, 
+                                       file_path, df_imu_nav, i, radius, 
+                                       min_intensity_threshold, bad_point_threshold,Valid_Data_Mask,time_diff)
+            rows.append(row)
+
+        # Only create mask file if we processed data successfully
+        if len(rows) > 0:
+            # replace LLS_ with Mask_
+            file_path_Mask = file_path.replace('LLS_', 'Mask_')
+            np.savetxt(file_path_Mask, Valid_Data_Mask, delimiter=',', fmt='%d')
+            log_message(f"Processed {len(rows)} timestamps from file {os.path.basename(file_path)}")
+        else:
+            log_message(f"Warning: No data processed from file {os.path.basename(file_path)}")
+
+        return rows
+        
+    except Exception as e:
+        log_message(f"Error processing data from file {os.path.basename(file_path)}: {str(e)}")
+        log_message(f"File will be skipped. Error details: {traceback.format_exc()}")
+        return []
 
 def calc_point_density(data_good, velocity, time_diff):
     """Calculate point density and add it to the data."""
@@ -549,8 +601,39 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     # check for dir and files
     LLS_Check(LLSDir, LLSOutputDir, xyz_files, log_callback)
 
-    # estimate run time
-    total_size, Start_Time = Estiamted_Run_Time(xyz_files, LLSDir, process_speed=4.53, log_callback=log_callback)
+    # Pre-filter files to remove empty ones
+    valid_xyz_files = []
+    skipped_files = 0
+    
+    for file_path in xyz_files:
+        if not os.path.exists(file_path):
+            log_message(f"Warning: File does not exist, skipping: {os.path.basename(file_path)}")
+            skipped_files += 1
+            continue
+            
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            log_message(f"Warning: Empty file detected, skipping: {os.path.basename(file_path)}")
+            skipped_files += 1
+            continue
+        elif file_size < 50:  # Very small files are likely invalid
+            log_message(f"Warning: File too small ({file_size} bytes), skipping: {os.path.basename(file_path)}")
+            skipped_files += 1
+            continue
+            
+        valid_xyz_files.append(file_path)
+    
+    if skipped_files > 0:
+        log_message(f"Skipped {skipped_files} empty or invalid files")
+    
+    if not valid_xyz_files:
+        log_message("Error: No valid .xyz files found after filtering")
+        return False
+    
+    log_message(f"Processing {len(valid_xyz_files)} valid LLS files (skipped {skipped_files})")
+
+    # estimate run time using valid files only
+    total_size, Start_Time = Estiamted_Run_Time(valid_xyz_files, LLSDir, process_speed=4.53, log_callback=log_callback)
 
     dfLS = pd.DataFrame(columns=['FileNumber', 'FileName', 'Date_Time', 'TimeUnix', 'TotalPoints', 'NumLIpts', 'NumSLpts',
                                  'PercentLIPoints', 'AUV_Heading', 'AUV_Pitch', 'AUV_Roll', 'AUV_Depth', 'AUV_Altitude', 'AUV_Easting',
@@ -561,19 +644,37 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
 
     rows_list = []
     file_count = 0
-    log_message(f"Processing {len(xyz_files)} LLS files...")
+    successfully_processed = 0
     
-    for file in xyz_files:
+    for file in valid_xyz_files:
         file_count += 1
-        log_message(f"Processing file {file_count}/{len(xyz_files)}: {os.path.basename(file)}")
+        log_message(f"Processing file {file_count}/{len(valid_xyz_files)}: {os.path.basename(file)}")
+        
         file_rows = process_xyz_file(file, file_count, RADIUS, MIN_INTENSITY_THRESHOLD, 
                                 BAD_POINT_THRESHOLD, VehicleDir, log_callback)
-        rows_list.extend(file_rows)
+        
+        if file_rows and len(file_rows) > 0:
+            rows_list.extend(file_rows)
+            successfully_processed += 1
+        else:
+            log_message(f"File {os.path.basename(file)} produced no data - may be corrupted or invalid")
 
+    if not rows_list:
+        log_message("Error: No data was successfully processed from any files")
+        return False
+    
+    log_message(f"Successfully processed {successfully_processed} out of {len(valid_xyz_files)} files")
+    log_message(f"Total data points collected: {len(rows_list)}")
+
+    log_message(f"Successfully processed {successfully_processed} out of {len(valid_xyz_files)} files")
+    log_message(f"Total data points collected: {len(rows_list)}")
+
+    # Continue with rest of processing...
     dfLS = pd.DataFrame(rows_list)
     dfLS['Date_Time'] = pd.to_datetime(dfLS['Date_Time'])
     dfLS.sort_values(by='Date_Time', inplace=True)
     dfLS.reset_index(drop=True, inplace=True)
+    
     # Save the DataFrame to a CSV file - use gui_output_dir if available
     output_file = os.path.join(output_dir if output_dir else LLSOutputDir, "LLS_Processed_Lls.csv")
     dfLS.to_csv(output_file, index=False)

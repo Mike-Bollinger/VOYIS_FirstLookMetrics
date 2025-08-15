@@ -436,71 +436,293 @@ class Metrics:
             if not os.path.exists(nav_file_path):
                 print(f"Navigation file not found: {nav_file_path}")
                 return False
-            
+
             # Store nav file path for reference
             self.nav_file_path = nav_file_path
             
             # Initialize nav data storage
             self.nav_timestamps = []
             
-            # Read the navigation file
-            with open(nav_file_path, 'r') as f:
-                lines = f.readlines()
+            # Try to load with pandas first (more robust)
+            try:
+                import pandas as pd
                 
-            # Skip header lines (first two lines typically)
-            data_lines = lines[2:]
-            
-            total_entries = 0
-            for line in data_lines:
+                # Try different approaches to read the navigation file
+                nav_df = None
+                
+                # First try: standard CSV with header row
                 try:
-                    # Skip empty lines
-                    if not line.strip():
-                        continue
+                    nav_df = pd.read_csv(nav_file_path)
+                    print(f"Loaded navigation file with standard CSV format")
+                except:
+                    # Second try: skip units row if present (like the test format)
+                    try:
+                        nav_df = pd.read_csv(nav_file_path, header=0, skiprows=[1])
+                        print(f"Loaded navigation file skipping units row")
+                    except:
+                        # Third try: with different delimiters
+                        try:
+                            nav_df = pd.read_csv(nav_file_path, sep=r'\s*,\s*', engine='python')
+                            print(f"Loaded navigation file with flexible delimiter")
+                        except:
+                            raise Exception("Could not read navigation file with pandas")
+                
+                # Clean column names
+                nav_df.columns = nav_df.columns.str.strip()
+                
+                print(f"Available columns: {list(nav_df.columns)}")
+                
+                # Find the required columns with flexible matching
+                time_col = None
+                date_col = None
+                mission_time_col = None
+                altitude_col = None
+                depth_col = None
+                heading_col = None
+                
+                # Look for time columns (multiple formats)
+                for col in nav_df.columns:
+                    col_lower = col.lower()
+                    if 'mission_msecs' in col_lower or 'mission_time' in col_lower:
+                        mission_time_col = col
+                        print(f"Found mission time column: {col}")
+                        break
+                    elif 'time' in col_lower and 'rate' not in col_lower:
+                        time_col = col
+                
+                # Look for date column
+                for col in nav_df.columns:
+                    if 'date' in col.lower():
+                        date_col = col
+                        break
+                
+                # Look for altitude column
+                for col in nav_df.columns:
+                    col_lower = col.lower()
+                    if 'altitude' in col_lower and 'rate' not in col_lower:
+                        altitude_col = col
+                        break
+                
+                # Look for depth column
+                for col in nav_df.columns:
+                    col_lower = col.lower()
+                    if 'depth' in col_lower and 'rate' not in col_lower:
+                        depth_col = col
+                        break
+                
+                # Look for heading column
+                for col in nav_df.columns:
+                    col_lower = col.lower()
+                    if 'heading' in col_lower and 'rate' not in col_lower:
+                        heading_col = col
+                        break
+                
+                print(f"Found columns - Mission Time: {mission_time_col}, Time: {time_col}, Date: {date_col}, Altitude: {altitude_col}, Depth: {depth_col}, Heading: {heading_col}")
+                
+                # Check if we have the necessary columns for either format
+                has_mission_time_format = mission_time_col and altitude_col and heading_col
+                has_date_time_format = time_col and date_col and altitude_col and heading_col
+                
+                if not (has_mission_time_format or has_date_time_format):
+                    print("Missing required columns for both mission time and date/time formats, falling back to manual parsing")
+                    raise Exception("Missing required columns")
+                
+                total_entries = 0
+                
+                # Process navigation data
+                for idx, row in nav_df.iterrows():
+                    try:
+                        altitude_str = str(row[altitude_col]).strip()
+                        heading_str = str(row[heading_col]).strip()
+                        depth_str = str(row[depth_col]).strip() if depth_col else "0"
                         
-                    # Split the line by commas
-                    parts = line.strip().split(',')
-                    
-                    # Check if we have enough parts for time, date, altitude, depth, and heading
-                    if len(parts) >= 6:
-                        # Format: "HH:MM:SS.SSS", "MM/DD/YYYY", "Lat/Lon", "Altitude", "Depth", "Heading"
-                        time_str = parts[0].strip()
-                        date_str = parts[1].strip()
-                        lon_lat_str = parts[2].strip()
-                        altitude_str = parts[3].strip()
-                        depth_str = parts[4].strip()
-                        heading_str = parts[5].strip()
+                        # Parse timestamp based on available format
+                        timestamp = None
                         
-                        # Combine date and time
-                        timestamp = self._parse_nav_datetime(date_str, time_str)
+                        if mission_time_col:
+                            # Mission time format: "17:00:16.1" - convert to today's date
+                            mission_time_str = str(row[mission_time_col]).strip()
+                            timestamp = self._parse_mission_time(mission_time_str)
+                        elif time_col and date_col:
+                            # Separate date and time columns
+                            time_str = str(row[time_col]).strip()
+                            date_str = str(row[date_col]).strip()
+                            timestamp = self._parse_nav_datetime(date_str, time_str)
                         
                         if timestamp:
                             try:
                                 altitude = float(altitude_str)
-                                depth = float(depth_str)
+                                depth = float(depth_str) if depth_str != '0' else 0.0
                                 heading = float(heading_str)
                                 # Store timestamp, altitude, depth, and heading as a tuple
                                 self.nav_timestamps.append((timestamp, altitude, depth, heading))
                                 total_entries += 1
-                            except ValueError:
-                                print(f"Invalid altitude, depth, or heading value: {altitude_str}, {depth_str}, {heading_str}")
+                            except ValueError as ve:
+                                print(f"Invalid numeric value at row {idx}: altitude='{altitude_str}', depth='{depth_str}', heading='{heading_str}' - {ve}")
                                 
-                except Exception as e:
-                    print(f"Error parsing navigation line: {str(e)}")
-                    continue
-            
-            print(f"Loaded {total_entries} navigation points from navigation file")
-            
-            # Sort timestamps chronologically for faster searching
-            if self.nav_timestamps:
-                self.nav_timestamps.sort(key=lambda x: x[0])
+                    except Exception as e:
+                        print(f"Error parsing row {idx}: {str(e)}")
+                        continue
                 
-            return total_entries > 0
+                print(f"Loaded {total_entries} navigation points from navigation file using pandas")
+                
+                # Sort timestamps chronologically for faster searching
+                if self.nav_timestamps:
+                    self.nav_timestamps.sort(key=lambda x: x[0])
+                    
+                return total_entries > 0
+                
+            except Exception as pandas_error:
+                print(f"Pandas loading failed, trying manual parsing: {pandas_error}")
+                
+                # Fallback to manual parsing
+                with open(nav_file_path, 'r') as f:
+                    lines = f.readlines()
+                    
+                # Skip header lines (first two lines typically)
+                data_lines = lines[2:]
+                
+                total_entries = 0
+                for line in data_lines:
+                    try:
+                        # Skip empty lines
+                        if not line.strip():
+                            continue
+                            
+                        # Split the line by commas
+                        parts = line.strip().split(',')
+                        
+                        # Check if we have enough parts for time, date, altitude, depth, and heading
+                        if len(parts) >= 6:
+                            # Format: "HH:MM:SS.SSS", "MM/DD/YYYY", "Lat/Lon", "Altitude", "Depth", "Heading"
+                            time_str = parts[0].strip()
+                            date_str = parts[1].strip()
+                            lon_lat_str = parts[2].strip()
+                            altitude_str = parts[3].strip()
+                            depth_str = parts[4].strip()
+                            heading_str = parts[5].strip()
+                            
+                            # Combine date and time
+                            timestamp = self._parse_nav_datetime(date_str, time_str)
+                            
+                            if timestamp:
+                                try:
+                                    altitude = float(altitude_str)
+                                    depth = float(depth_str)
+                                    heading = float(heading_str)
+                                    # Store timestamp, altitude, depth, and heading as a tuple
+                                    self.nav_timestamps.append((timestamp, altitude, depth, heading))
+                                    total_entries += 1
+                                except ValueError:
+                                    print(f"Invalid altitude, depth, or heading value: {altitude_str}, {depth_str}, {heading_str}")
+                                    
+                    except Exception as e:
+                        print(f"Error parsing navigation line: {str(e)}")
+                        continue
+                
+                print(f"Loaded {total_entries} navigation points from navigation file using manual parsing")
+                
+                # Sort timestamps chronologically for faster searching
+                if self.nav_timestamps:
+                    self.nav_timestamps.sort(key=lambda x: x[0])
+                    
+                return total_entries > 0
                 
         except Exception as e:
             print(f"Error loading navigation data: {e}")
             import traceback
             print(traceback.format_exc())
             return False
+
+    def _find_and_load_navigation_file(self, input_folder: str, output_folder: str) -> str:
+        """
+        Search for navigation files in common locations and load the first one found
+        
+        Args:
+            input_folder: Input directory path
+            output_folder: Output directory path
+            
+        Returns:
+            Path to the navigation file loaded, or None if none found
+        """
+        # Navigation file names to search for (in order of preference)
+        nav_file_names = [
+            'NAV_STATE.txt',
+            'PHINS_INS.txt', 
+            'PHINS INS.txt',
+            'USBL.txt',
+            'BATHY.txt',
+            'CTD.txt'
+        ]
+        
+        # Directories to search in
+        search_directories = []
+        
+        # Add input folder and its parent/sibling directories
+        if input_folder:
+            input_parent = os.path.dirname(input_folder)
+            search_directories.extend([
+                input_folder,
+                input_parent,
+                os.path.join(input_folder, 'vehicle_raw'),
+                os.path.join(input_folder, 'nav_plotter'),
+                os.path.join(input_folder, 'navigation'),
+                os.path.join(input_folder, 'vehicle_raw', 'nav_plotter'),
+                os.path.join(input_parent, 'vehicle_raw'),
+                os.path.join(input_parent, 'nav_plotter'),
+                os.path.join(input_parent, 'navigation'),
+                os.path.join(input_parent, 'vehicle_raw', 'nav_plotter'),
+                os.path.join(input_parent, '..', 'vehicle_raw'),
+                os.path.join(input_parent, '..', 'nav_plotter'),
+                os.path.join(input_parent, '..', 'navigation'),
+                os.path.join(input_parent, '..', 'vehicle_raw', 'nav_plotter')
+            ])
+        
+        # Add output folder and its parent/sibling directories
+        if output_folder:
+            output_parent = os.path.dirname(output_folder)
+            search_directories.extend([
+                output_folder,
+                output_parent,
+                os.path.join(output_folder, 'vehicle_raw'),
+                os.path.join(output_folder, 'nav_plotter'),
+                os.path.join(output_folder, 'navigation'),
+                os.path.join(output_folder, 'vehicle_raw', 'nav_plotter'),
+                os.path.join(output_parent, 'vehicle_raw'),
+                os.path.join(output_parent, 'nav_plotter'),
+                os.path.join(output_parent, 'navigation'),
+                os.path.join(output_parent, 'vehicle_raw', 'nav_plotter'),
+                os.path.join(output_parent, '..', 'vehicle_raw'),
+                os.path.join(output_parent, '..', 'nav_plotter'),
+                os.path.join(output_parent, '..', 'navigation'),
+                os.path.join(output_parent, '..', 'vehicle_raw', 'nav_plotter')
+            ])
+        
+        # Remove duplicates and normalize paths
+        search_directories = list(set(os.path.normpath(d) for d in search_directories))
+        
+        print(f"Searching for navigation files in {len(search_directories)} directories...")
+        
+        # Search for navigation files
+        for directory in search_directories:
+            if not os.path.exists(directory):
+                continue
+                
+            print(f"  Checking directory: {directory}")
+            
+            for nav_filename in nav_file_names:
+                nav_path = os.path.join(directory, nav_filename)
+                if os.path.exists(nav_path):
+                    print(f"  Found navigation file: {nav_path}")
+                    
+                    # Try to load the navigation file
+                    if self.load_nav_data(nav_path):
+                        return nav_path
+                    else:
+                        print(f"  Failed to load navigation file: {nav_path}")
+        
+        print("  No navigation files found or loaded successfully")
+        return None
 
     def _parse_nav_datetime(self, date_str, time_str):
         """
@@ -539,6 +761,48 @@ class Metrics:
                 
         except Exception as e:
             print(f"Error parsing nav datetime - date: {date_str}, time: {time_str}, error: {e}")
+            return None
+
+    def _parse_mission_time(self, mission_time_str):
+        """
+        Parse mission time format like "17:00:16.1" and convert to datetime
+        Uses the current date for the mission time
+        
+        Args:
+            mission_time_str: Mission time string in format HH:MM:SS.S
+            
+        Returns:
+            Datetime object or None if parsing failed
+        """
+        try:
+            import datetime
+            from datetime import date
+            
+            # Clean up the string
+            mission_time_str = mission_time_str.strip()
+            
+            # Parse time components
+            if '.' in mission_time_str:  # Has decimal seconds
+                time_parts = mission_time_str.split('.')
+                hour, minute, second = map(int, time_parts[0].split(':'))
+                decimal_part = time_parts[1]
+                # Convert decimal seconds to microseconds
+                microsecond = int(decimal_part.ljust(6, '0')[:6])  # Pad to 6 digits, take first 6
+            else:
+                hour, minute, second = map(int, mission_time_str.split(':'))
+                microsecond = 0
+            
+            # Use today's date (or the date from image metadata if available)
+            # For now, use a fixed date that matches your dive data
+            # You may need to adjust this based on your actual dive date
+            dive_date = date(2025, 8, 12)  # Based on your image timestamps
+                
+            # Create datetime object
+            dt = datetime.datetime.combine(dive_date, datetime.time(hour, minute, second, microsecond))
+            return dt
+                
+        except Exception as e:
+            print(f"Error parsing mission time: {mission_time_str}, error: {e}")
             return None
 
     def get_altitude_from_nav(self, image_path_or_timestamp):
@@ -764,6 +1028,14 @@ class Metrics:
             # Load navigation data if provided
             if nav_file and os.path.exists(nav_file):
                 self.load_nav_data(nav_file)
+            else:
+                # If no nav file provided, try to find navigation files in common locations
+                print("No navigation file provided, searching for navigation files in common locations...")
+                nav_file_found = self._find_and_load_navigation_file(input_folder, output_folder)
+                if nav_file_found:
+                    print(f"Found and loaded navigation file: {nav_file_found}")
+                else:
+                    print("No navigation files found in common locations")
             
             # Check if GPS data is already available from a previous analyze_directory call
             if not self.gps_data:

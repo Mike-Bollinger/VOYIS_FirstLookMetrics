@@ -471,7 +471,7 @@ class AltitudeMap:
             return None
     
     def export_to_gis_formats(self, gps_data: List[Dict], output_path: str, 
-                             csv_filename: str = "Image_Metrics.csv",
+                             csv_filename: str = "Image_Location_Metrics.csv",
                              shapefile_filename: str = "Image_Locations.shp") -> Dict[str, str]:
         """Export GPS data to CSV and Shapefile formats"""
         result_files = {}
@@ -481,14 +481,21 @@ class AltitudeMap:
             # Create output directory if it doesn't exist
             os.makedirs(output_path, exist_ok=True)
             
-            # Create DataFrame
-            df = pd.DataFrame(gps_data)
-            
-            # Export CSV
-            csv_path = os.path.join(output_path, csv_filename)
-            df.to_csv(csv_path, index=False)
-            result_files['csv'] = csv_path
-            print(f"CSV exported successfully: {csv_path}")
+            # First check if the standard CSV already exists - don't overwrite it
+            standard_csv = os.path.join(output_path, "Image_Metrics.csv")
+            if os.path.exists(standard_csv):
+                # Use the existing file as our result but don't modify it
+                result_files['csv'] = standard_csv
+                print(f"Using existing CSV file: {standard_csv}")
+            else:
+                # Create a separate analysis CSV with a different name to avoid conflicts
+                df = pd.DataFrame(gps_data)
+                
+                # Export CSV with Analysis_ prefix to distinguish it
+                csv_path = os.path.join(output_path, csv_filename)
+                df.to_csv(csv_path, index=False)
+                result_files['csv'] = csv_path
+                print(f"CSV exported successfully: {csv_path}")
             
             # Export Shapefile if geopandas is available
             if GEOPANDAS_AVAILABLE:

@@ -44,6 +44,9 @@ class FootprintMap:
         try:
             print(f"Loading navigation data from {nav_file_path}")
             
+            # Store nav file path for later use
+            self.nav_file_path = nav_file_path
+            
             # First, examine the file structure to determine format
             with open(nav_file_path, 'r') as f:
                 # Read the first few lines to analyze structure
@@ -79,32 +82,44 @@ class FootprintMap:
                 # Print available columns for debugging
                 print(f"Available columns in nav file: {list(self.nav_data.columns)}")
                 
-                # Find time column (could be named Time, time, timestamp, etc.)
+                # Find time column (could be named Time, time, timestamp, mission_msecs, etc.)
                 time_col = None
                 date_col = None
+                mission_time_col = None
                 
                 for col in self.nav_data.columns:
-                    if col.lower() == 'time':
+                    col_lower = col.lower()
+                    if 'mission_msecs' in col_lower or 'mission_time' in col_lower:
+                        mission_time_col = col
+                        print(f"Found mission time column: {col}")
+                        break
+                    elif col_lower == 'time':
                         time_col = col
-                    elif col.lower() == 'date':
+                    elif col_lower == 'date':
                         date_col = col
                 
-                if time_col is None:
+                if time_col is None and mission_time_col is None:
                     # Try to find any column with 'time' in the name
-                    time_candidates = [col for col in self.nav_data.columns if 'time' in col.lower()]
+                    time_candidates = [col for col in self.nav_data.columns if 'time' in col.lower() and 'rate' not in col.lower()]
                     if time_candidates:
-                        time_col = time_candidates[0]
-                        print(f"Using '{time_col}' as time column")
+                        if any('mission' in col.lower() for col in time_candidates):
+                            mission_time_col = next(col for col in time_candidates if 'mission' in col.lower())
+                            print(f"Using '{mission_time_col}' as mission time column")
+                        else:
+                            time_col = time_candidates[0]
+                            print(f"Using '{time_col}' as time column")
                 
                 # Find heading column
                 heading_col = None
                 for col in self.nav_data.columns:
-                    if col.lower() == 'heading':
+                    col_lower = col.lower()
+                    if 'heading' in col_lower and 'rate' not in col_lower:
                         heading_col = col
+                        break
                 
                 if heading_col is None:
                     # Try to find any column with 'head' in the name
-                    heading_candidates = [col for col in self.nav_data.columns if 'head' in col.lower()]
+                    heading_candidates = [col for col in self.nav_data.columns if 'head' in col.lower() and 'rate' not in col.lower()]
                     if heading_candidates:
                         heading_col = heading_candidates[0]
                         print(f"Using '{heading_col}' as heading column")
@@ -120,8 +135,44 @@ class FootprintMap:
                     print("Warning: No heading column found. Using default heading of 0.")
                     self.nav_data['Heading'] = 0.0
                 
-                # Extract datetime from time and date columns
-                if time_col and date_col:
+                # Extract datetime from time columns
+                if mission_time_col:
+                    # Mission time format: "17:00:16.1"
+                    print(f"Using mission time column '{mission_time_col}'")
+                    
+                    try:
+                        # Show sample data
+                        print(f"Sample mission time: {self.nav_data[mission_time_col].iloc[0]}")
+                        
+                        # Convert mission time to datetime
+                        # Use August 12, 2025 as the base date (from your image timestamps)
+                        from datetime import datetime, date, time
+                        
+                        def parse_mission_time(mission_time_str):
+                            try:
+                                time_str = str(mission_time_str).strip()
+                                if '.' in time_str:
+                                    time_parts = time_str.split('.')
+                                    hour, minute, second = map(int, time_parts[0].split(':'))
+                                    decimal_part = time_parts[1]
+                                    microsecond = int(decimal_part.ljust(6, '0')[:6])
+                                else:
+                                    hour, minute, second = map(int, time_str.split(':'))
+                                    microsecond = 0
+                                
+                                # Use the dive date (adjust as needed)
+                                dive_date = date(2025, 8, 12)
+                                return datetime.combine(dive_date, time(hour, minute, second, microsecond))
+                            except:
+                                return pd.NaT
+                        
+                        self.nav_data['Datetime'] = self.nav_data[mission_time_col].apply(parse_mission_time)
+                        
+                    except Exception as e:
+                        print(f"Error converting mission time to datetime: {e}")
+                        return False
+                        
+                elif time_col and date_col:
                     # Both time and date columns available
                     print(f"Using time column '{time_col}' and date column '{date_col}'")
                     
@@ -1646,38 +1697,114 @@ class FootprintMap:
         try:
             # Create DataFrame from footprints
             export_data = []
+            
+            # Create lookup dictionaries for overlap values
+            vertical_overlap_by_filename = {}
+            horizontal_overlap_by_filename = {}
+            overall_overlap_by_filename = {}
+            
+            # Process vertical overlap data if available
+            if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:
+                for overlap in self.vertical_overlap_stats.get('overlap_data', []):
+                    if 'current_fp' in overlap and 'next_fp' in overlap:
+                        current_filename = overlap['current_fp'].get('filename', '')
+                        next_filename = overlap['next_fp'].get('filename', '')
+                        overlap_pct = overlap.get('overlap_percent', 0.0)
+                        
+                        # Store overlap percentage for both files
+                        if current_filename:
+                            if current_filename not in vertical_overlap_by_filename:
+                                vertical_overlap_by_filename[current_filename] = []
+                            vertical_overlap_by_filename[current_filename].append(overlap_pct)
+                            
+                        if next_filename:
+                            if next_filename not in vertical_overlap_by_filename:
+                                vertical_overlap_by_filename[next_filename] = []
+                            vertical_overlap_by_filename[next_filename].append(overlap_pct)
+            
+            # Process horizontal overlap data if available
+            if hasattr(self, 'horizontal_overlap_stats') and self.horizontal_overlap_stats:
+                for overlap in self.horizontal_overlap_stats.get('overlap_data', []):
+                    if 'current_fp' in overlap and 'next_fp' in overlap:
+                        current_filename = overlap['current_fp'].get('filename', '')
+                        next_filename = overlap['next_fp'].get('filename', '')
+                        overlap_pct = overlap.get('overlap_percent', 0.0)
+                        
+                        # Store overlap percentage for both files
+                        if current_filename:
+                            if current_filename not in horizontal_overlap_by_filename:
+                                horizontal_overlap_by_filename[current_filename] = []
+                            horizontal_overlap_by_filename[current_filename].append(overlap_pct)
+                            
+                        if next_filename:
+                            if next_filename not in horizontal_overlap_by_filename:
+                                horizontal_overlap_by_filename[next_filename] = []
+                            horizontal_overlap_by_filename[next_filename].append(overlap_pct)
+            
+            # Process overall overlap data if available
+            if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats and 'polygons' in self.overall_overlap_stats:
+                for poly_data in self.overall_overlap_stats['polygons']:
+                    if 'footprint' in poly_data and 'overlap_count' in poly_data:
+                        filename = poly_data['footprint'].get('filename', '')
+                        if filename:
+                            overall_overlap_by_filename[filename] = poly_data.get('overlap_count', 0)
+            
+            # Create export data with overlap information
             for i, fp in enumerate(footprints):
+                filename = fp.get('filename', '')
+                
                 # Extract the essential data
                 data = {
                     'index': i,
-                    'filename': fp.get('filename', ''),
+                    'filename': filename,
                     'latitude': fp.get('latitude', 0),
                     'longitude': fp.get('longitude', 0),
                     'altitude': fp.get('altitude', 0),
                     'heading': fp.get('heading', 0),
                     'footprint_width': fp.get('width', 0),
                     'footprint_height': fp.get('height', 0),
+                    'footprint_area': fp.get('width', 0) * fp.get('height', 0),
                     'datetime': fp.get('DateTime', '')
                 }
                 
-                # Add statistics from overlap calculations if available
-                if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats:
-                    # Find matching polygon in overall stats
-                    for poly_data in self.overall_overlap_stats.get('polygons', []):
-                        if poly_data['index'] == i:
-                            data['overlap_count'] = poly_data.get('overlap_count', 0)
-                            break
+                # Add vertical overlap statistics
+                if filename in vertical_overlap_by_filename:
+                    overlaps = vertical_overlap_by_filename[filename]
+                    data['vertical_overlap'] = sum(overlaps) / len(overlaps)
+                
+                # Add horizontal overlap statistics
+                if filename in horizontal_overlap_by_filename:
+                    overlaps = horizontal_overlap_by_filename[filename]
+                    data['horizontal_overlap'] = sum(overlaps) / len(overlaps)
+                
+                # Add overall overlap statistics
+                if filename in overall_overlap_by_filename:
+                    data['overall_overlap'] = overall_overlap_by_filename[filename]
                 
                 export_data.append(data)
             
-            # Create DataFrame
+            # Create DataFrame for our data
             df = pd.DataFrame(export_data)
             
-            # Export to CSV
-            csv_file = os.path.join(output_path, "footprints.csv")
-            df.to_csv(csv_file, index=False)
-            result_files['csv'] = csv_file
-            print(f"Footprint data exported to CSV: {csv_file}")
+            # First check if the main metrics CSV already exists
+            main_csv = os.path.join(output_path, "Image_Metrics.csv")
+            
+            if os.path.exists(main_csv):
+                # Use the main CSV name but don't overwrite it - we'll update it elsewhere
+                # via _update_master_csv_with_footprint_results
+                result_files['csv'] = main_csv
+                print(f"Using existing Image_Metrics.csv for updates")
+                
+                # Also export a footprints-specific CSV for reference
+                detail_csv = os.path.join(output_path, "Analysis_footprints.csv") 
+                df.to_csv(detail_csv, index=False)
+                result_files['detail_csv'] = detail_csv
+                print(f"Footprint details exported to: {detail_csv}")
+            else:
+                # No main CSV exists, create one with footprint data
+                df.to_csv(main_csv, index=False)
+                result_files['csv'] = main_csv
+                print(f"Created new Image_Metrics.csv with footprint data: {main_csv}")
             
             # Export to shapefile if geopandas is available
             if GEOPANDAS_AVAILABLE:
@@ -2428,7 +2555,10 @@ class FootprintMap:
                 if input_folder:
                     from models.metrics import Metrics
                     metrics = Metrics()
-                    csv_created = metrics.create_image_metrics_csv(input_folder, csv_dir)
+                    
+                    # Pass navigation file if available
+                    nav_file = getattr(self, 'nav_file_path', None)
+                    csv_created = metrics.create_image_metrics_csv(input_folder, csv_dir, nav_file)
                     if not csv_created:
                         print("Failed to create CSV file")
                         return None
@@ -2540,34 +2670,86 @@ class FootprintMap:
             
             # Add overlap data if available
             if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:
+                # Process vertical overlap data
+                print("Adding vertical overlap metrics to CSV...")
+                
+                # Create a mapping of filenames to average overlap percentages
+                filename_to_vertical_overlap = {}
+                
+                # Each overlap record contains current_fp and next_fp with complete footprint info
                 for overlap in self.vertical_overlap_stats.get('overlap_data', []):
-                    filename1 = overlap.get('filename1', '')
-                    filename2 = overlap.get('filename2', '')
-                    overlap_pct = overlap.get('overlap_percentage', 0.0)
-                    
-                    if filename1 in footprint_data:
-                        footprint_data[filename1]['vertical_overlap'] = overlap_pct
-                    if filename2 in footprint_data:
-                        footprint_data[filename2]['vertical_overlap'] = overlap_pct
+                    if 'current_fp' in overlap and 'next_fp' in overlap:
+                        current_filename = overlap['current_fp'].get('filename', '')
+                        next_filename = overlap['next_fp'].get('filename', '')
+                        overlap_pct = overlap.get('overlap_percent', 0.0)
+                        
+                        # Store overlap percentage for both files
+                        if current_filename:
+                            if current_filename not in filename_to_vertical_overlap:
+                                filename_to_vertical_overlap[current_filename] = []
+                            filename_to_vertical_overlap[current_filename].append(overlap_pct)
+                            
+                        if next_filename:
+                            if next_filename not in filename_to_vertical_overlap:
+                                filename_to_vertical_overlap[next_filename] = []
+                            filename_to_vertical_overlap[next_filename].append(overlap_pct)
+                
+                # Calculate average overlap for each file and add to footprint_data
+                for filename, overlap_values in filename_to_vertical_overlap.items():
+                    if filename in footprint_data:
+                        avg_overlap = sum(overlap_values) / len(overlap_values)
+                        footprint_data[filename]['vertical_overlap'] = avg_overlap
+                
+                print(f"Added vertical overlap metrics for {len(filename_to_vertical_overlap)} files")
             
             if hasattr(self, 'horizontal_overlap_stats') and self.horizontal_overlap_stats:
+                # Process horizontal overlap data
+                print("Adding horizontal overlap metrics to CSV...")
+                
+                # Create a mapping of filenames to average overlap percentages
+                filename_to_horizontal_overlap = {}
+                
+                # Each overlap record contains current_fp and next_fp with complete footprint info
                 for overlap in self.horizontal_overlap_stats.get('overlap_data', []):
-                    filename1 = overlap.get('filename1', '')
-                    filename2 = overlap.get('filename2', '')
-                    overlap_pct = overlap.get('overlap_percentage', 0.0)
-                    
-                    if filename1 in footprint_data:
-                        footprint_data[filename1]['horizontal_overlap'] = overlap_pct
-                    if filename2 in footprint_data:
-                        footprint_data[filename2]['horizontal_overlap'] = overlap_pct
+                    if 'current_fp' in overlap and 'next_fp' in overlap:
+                        current_filename = overlap['current_fp'].get('filename', '')
+                        next_filename = overlap['next_fp'].get('filename', '')
+                        overlap_pct = overlap.get('overlap_percent', 0.0)
+                        
+                        # Store overlap percentage for both files
+                        if current_filename:
+                            if current_filename not in filename_to_horizontal_overlap:
+                                filename_to_horizontal_overlap[current_filename] = []
+                            filename_to_horizontal_overlap[current_filename].append(overlap_pct)
+                            
+                        if next_filename:
+                            if next_filename not in filename_to_horizontal_overlap:
+                                filename_to_horizontal_overlap[next_filename] = []
+                            filename_to_horizontal_overlap[next_filename].append(overlap_pct)
+                
+                # Calculate average overlap for each file and add to footprint_data
+                for filename, overlap_values in filename_to_horizontal_overlap.items():
+                    if filename in footprint_data:
+                        avg_overlap = sum(overlap_values) / len(overlap_values)
+                        footprint_data[filename]['horizontal_overlap'] = avg_overlap
+                
+                print(f"Added horizontal overlap metrics for {len(filename_to_horizontal_overlap)} files")
             
             if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats:
-                for overlap in self.overall_overlap_stats.get('overlap_data', []):
-                    filename = overlap.get('filename', '')
-                    overlap_count = overlap.get('overlap_count', 0)
+                # Process overall overlap data
+                print("Adding overall overlap metrics to CSV...")
+                
+                # Each polygon record has a footprint object and overlap_count
+                if 'polygons' in self.overall_overlap_stats:
+                    for poly_data in self.overall_overlap_stats['polygons']:
+                        if 'footprint' in poly_data and 'overlap_count' in poly_data:
+                            filename = poly_data['footprint'].get('filename', '')
+                            overlap_count = poly_data.get('overlap_count', 0)
+                            
+                            if filename and filename in footprint_data:
+                                footprint_data[filename]['overall_overlap'] = overlap_count
                     
-                    if filename in footprint_data:
-                        footprint_data[filename]['overall_overlap'] = overlap_count
+                    print(f"Added overall overlap metrics for {len(self.overall_overlap_stats['polygons'])} files")
             
             # Update the DataFrame
             for idx, row in df.iterrows():
