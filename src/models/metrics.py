@@ -369,6 +369,38 @@ class Metrics:
                 return f"{size_bytes:.2f} {unit}"
             size_bytes /= 1024
 
+    @staticmethod
+    @staticmethod
+    def normalize_heading(heading_degrees: float) -> float:
+        """
+        Normalize heading to 0-360 degree range
+        
+        Args:
+            heading_degrees: Heading in degrees (can be negative or > 360)
+            
+        Returns:
+            Normalized heading in range [0, 360)
+        """
+        original_heading = heading_degrees
+        
+        if heading_degrees < 0:
+            # Handle negative headings by adding multiples of 360
+            while heading_degrees < 0:
+                heading_degrees += 360
+        elif heading_degrees >= 360:
+            # Handle headings >= 360 by subtracting multiples of 360
+            heading_degrees = heading_degrees % 360
+        
+        # Debug output for first few normalizations
+        if not hasattr(Metrics, '_heading_debug_count'):
+            Metrics._heading_debug_count = 0
+        
+        if Metrics._heading_debug_count < 5 and original_heading != heading_degrees:
+            print(f"DEBUG: Normalized heading {original_heading:.1f}° → {heading_degrees:.1f}°")
+            Metrics._heading_debug_count += 1
+        
+        return heading_degrees
+
     def get_altitude_statistics(self, threshold: float = 9.0) -> Dict:
         """
         Calculate altitude statistics from the GPS data
@@ -554,6 +586,8 @@ class Metrics:
                                 altitude = float(altitude_str)
                                 depth = float(depth_str) if depth_str != '0' else 0.0
                                 heading = float(heading_str)
+                                # Normalize heading to 0-360 range
+                                heading = self.normalize_heading(heading)
                                 # Store timestamp, altitude, depth, and heading as a tuple
                                 self.nav_timestamps.append((timestamp, altitude, depth, heading))
                                 total_entries += 1
@@ -610,6 +644,8 @@ class Metrics:
                                     altitude = float(altitude_str)
                                     depth = float(depth_str)
                                     heading = float(heading_str)
+                                    # Normalize heading to 0-360 range
+                                    heading = self.normalize_heading(heading)
                                     # Store timestamp, altitude, depth, and heading as a tuple
                                     self.nav_timestamps.append((timestamp, altitude, depth, heading))
                                     total_entries += 1

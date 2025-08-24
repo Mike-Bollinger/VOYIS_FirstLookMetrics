@@ -18,6 +18,9 @@ class AppWindow(UIComponents, ProcessingController):
         self.root.title("VOYIS First Look Metrics")
         self.root.geometry("1200x800")
         
+        # Initialize ProcessingController first
+        ProcessingController.__init__(self)
+        
         # Initialize variables
         self.setup_variables()
         
@@ -490,16 +493,31 @@ class AppWindow(UIComponents, ProcessingController):
         threshold_entry.bind('<Return>', self.threshold_changed)
         threshold_entry.bind('<FocusOut>', self.threshold_changed)
         
-        # Process button
+        # Process and Stop buttons frame
+        buttons_frame = ttk.Frame(controls_frame)
+        buttons_frame.pack(pady=10, fill=tk.X)
+        
+        # Process button styling
         style = ttk.Style()
         style.configure("AccentButton.TButton", font=('', 10, 'bold'))
+        style.configure("StopButton.TButton", font=('', 10, 'bold'))
         
+        # Process button
         self.process_button = ttk.Button(
-            controls_frame, text="Process Images", 
+            buttons_frame, text="Process Images", 
             command=self.process_images,  # This comes from ProcessingController
             style="AccentButton.TButton"
         )
-        self.process_button.pack(pady=10)
+        self.process_button.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+        
+        # Stop button
+        self.stop_button = ttk.Button(
+            buttons_frame, text="Stop Processing", 
+            command=self.stop_processing,  # This comes from ProcessingController
+            style="StopButton.TButton",
+            state=tk.DISABLED  # Initially disabled
+        )
+        self.stop_button.pack(side=tk.RIGHT, fill=tk.X, expand=True)
 
     def create_log_section(self):
         """Create the log output section"""

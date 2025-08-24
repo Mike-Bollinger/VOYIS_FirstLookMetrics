@@ -18,6 +18,7 @@ import pandas as pd
 import numpy as np
 import os
 import traceback
+from .metrics import Metrics
 
 
 class NavigationDataMerger:
@@ -350,8 +351,8 @@ class NavigationDataMerger:
         elif file_type == 'state':
             # For STATE files, ensure we use proper heading data
             if 'compass_heading' in df.columns and 'heading' not in df.columns:
-                df['heading'] = df['compass_heading']
-                self.log_message("Using compass_heading as heading for STATE file")
+                df['heading'] = df['compass_heading'].apply(lambda x: Metrics.normalize_heading(x) if pd.notna(x) else x)
+                self.log_message("Using compass_heading as heading for STATE file with normalization")
                 
         elif file_type == 'adcp':
             # ADCP files should have altitude data - this is crucial for bathymetry calculations

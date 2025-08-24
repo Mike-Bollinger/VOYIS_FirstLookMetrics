@@ -13,6 +13,11 @@ from typing import Optional, Callable, Dict, Any, List, Tuple
 class ProcessingController:
     """Controls the main processing workflow"""
     
+    def __init__(self):
+        # Add stop processing flag
+        self.stop_processing_flag = False
+        self.current_processing_thread = None
+    
     def setup_ui_update_thread(self):
         """Set up a queue and thread for updating the UI from background threads"""
         self.ui_queue = queue.Queue()
@@ -62,16 +67,56 @@ class ProcessingController:
         self.progress_label.config(text=message)
         self.root.update_idletasks()
 
+    def stop_processing(self):
+        """Stop the current processing operation"""
+        if self.current_processing_thread and self.current_processing_thread.is_alive():
+            self.stop_processing_flag = True
+            self.log_message("⚠️ Stop request received - processing will halt at next checkpoint...")
+            self.update_progress(0, "Stopping processing...")
+            
+            # Disable stop button immediately
+            if hasattr(self, 'stop_button'):
+                self.stop_button.configure(state=tk.DISABLED)
+        else:
+            self.log_message("No active processing to stop")
+
+    def check_stop_flag(self):
+        """Check if processing should be stopped. Returns True if should stop."""
+        if self.stop_processing_flag:
+            # Only log the stop message once
+            if not hasattr(self, '_stop_message_logged'):
+                self.log_message("🛑 Processing stopped by user request")
+                self.update_progress(0, "Processing stopped")
+                self._stop_message_logged = True
+            
+            # Re-enable process button and disable stop button
+            self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
+            if hasattr(self, 'stop_button'):
+                self.root.after(0, lambda: self.stop_button.configure(state=tk.DISABLED))
+            
+            return True
+        return False
+
     def process_images(self):
         """Main function to process images based on selected options"""
         if not self.validate_inputs():
             return
         
+        # Reset stop flag and stop message tracking
+        self.stop_processing_flag = False
+        if hasattr(self, '_stop_message_logged'):
+            delattr(self, '_stop_message_logged')
+        
         self.process_button.configure(state=tk.DISABLED)
+        
+        # Enable stop button if it exists
+        if hasattr(self, 'stop_button'):
+            self.stop_button.configure(state=tk.NORMAL)
         
         # Check if batch mode is enabled
         if self.batch_var.get():
-            threading.Thread(target=self.process_batch, daemon=True).start()
+            self.current_processing_thread = threading.Thread(target=self.process_batch, daemon=True)
+            self.current_processing_thread.start()
             return
         
         # Single mode processing
@@ -91,30 +136,55 @@ class ProcessingController:
             self.log_message(f"Input folder: {input_folder}")
         self.log_message(f"Output folder: {output_folder}")
         
-        threading.Thread(
+        self.current_processing_thread = threading.Thread(
             target=self._process_images_thread,
             args=(input_folder, output_folder),
             daemon=True
-        ).start()
+        )
+        self.current_processing_thread.start()
 
     def _process_images_thread(self, input_folder, output_folder):
         """Background thread function for processing images"""
         try:
+            # Check stop flag before starting
+            if self.check_stop_flag():
+                return
+                
             self.analyze_images(input_folder, output_folder)
             
-            self.log_message("\nAll selected processing tasks completed successfully.")
-            self.update_progress(100, "Processing complete!")
-            self.play_completion_sound()
+            # Only show completion if not stopped
+            if not self.stop_processing_flag:
+                self.log_message("\nAll selected processing tasks completed successfully.")
+                self.update_progress(100, "Processing complete!")
+                self.play_completion_sound()
             
         except Exception as e:
-            self.log_message(f"\nError during processing: {str(e)}")
-            self.update_progress(0, "Error during processing")
-            traceback.print_exc()
+            if not self.stop_processing_flag:  # Only log errors if not intentionally stopped
+                self.log_message(f"\nError during processing: {str(e)}")
+                self.update_progress(0, "Error during processing")
+                traceback.print_exc()
         finally:
+            # Always clean up thread reference and reset UI state
+            self.current_processing_thread = None
+            
+            # Reset stop flag and message tracking for next run
+            self.stop_processing_flag = False
+            if hasattr(self, '_stop_message_logged'):
+                delattr(self, '_stop_message_logged')
+            
+            # Always re-enable process button and disable stop button
             self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
+            if hasattr(self, 'stop_button'):
+                self.root.after(0, lambda: self.stop_button.configure(state=tk.DISABLED))
 
-    def analyze_images(self, input_folder, output_folder):
-        """Process images and LLS data based on selected functions"""
+    def analyze_images(self, input_folder, output_folder, skip_nav_processing=False):
+        """Process images and LLS data based on selected functions
+        
+        Args:
+            input_folder: Path to input folder containing images
+            output_folder: Path to output folder for results
+            skip_nav_processing: If True, skip navigation processing (used in batch mode when nav already processed)
+        """
         try:
             self.update_progress(0, "Starting processing...")
                        
@@ -133,8 +203,11 @@ class ProcessingController:
             # PhinsData manager has been deprecated and removed
             # All modules now use CSV-based processing for consistency
             
-            # Process Navigation data first if selected
-            if nav_selected:
+            # Process Navigation data first if selected (but skip if already done in batch processing)
+            if nav_selected and not skip_nav_processing:
+                if self.check_stop_flag():
+                    return
+                    
                 self.log_message("Processing Navigation data...")
                 try:
                     self.process_navigation_data(output_folder)
@@ -142,9 +215,14 @@ class ProcessingController:
                 except Exception as nav_error:
                     self.log_message(f"✗ Navigation processing failed: {nav_error}")
                     self.log_message(f"Traceback: {traceback.format_exc()}")
+            elif nav_selected and skip_nav_processing:
+                self.log_message("⚬ Skipping navigation processing (already completed in batch mode)")
             
             # Process LLS data if selected
             if lls_selected:
+                if self.check_stop_flag():
+                    return
+                    
                 self.log_message("Processing LLS data...")
                 try:
                     self.process_lls_data(output_folder)
@@ -155,6 +233,9 @@ class ProcessingController:
             
             # Process imagery data if selected
             if imagery_selected:
+                if self.check_stop_flag():
+                    return
+                    
                 self.log_message("Processing Imagery data...")
                 self.log_message("       ⚠ Note: All modules now use CSV-based processing for consistency")
                 
@@ -182,6 +263,10 @@ class ProcessingController:
                 else:
                     self.log_message("⚠ No navigation file specified - continuing without navigation data")
                 
+                # Check stop flag before starting metadata extraction
+                if self.check_stop_flag():
+                    return
+                
                 # IMPORTANT: Process basic metrics FIRST to populate GPS data
                 try:
                     self.log_message("Extracting image metadata...")
@@ -194,6 +279,7 @@ class ProcessingController:
                         # Update progress every 10% or on important messages
                         if progress_pct % 10 == 0 or "GPS data from" in message or "files" in message:
                             self.log_message(f"[{progress_pct:.0f}%] {message}")
+                        return True  # Continue processing (don't check stop flag here to avoid repeated messages)
                     
                     processed_files, results = self.metrics.analyze_directory(
                         input_folder,
@@ -209,6 +295,10 @@ class ProcessingController:
                 except Exception as metadata_error:
                     self.log_message(f"✗ Error extracting metadata: {metadata_error}")
                     self.log_message("Cannot proceed without image metadata")
+                    return
+                
+                # Check stop flag after metadata extraction
+                if self.check_stop_flag():
                     return
                 
                 # Get list of processing stages
@@ -238,6 +328,9 @@ class ProcessingController:
                     self.log_message(f"Processing {len(processing_stages)} imagery stages...")
                     
                     # STEP 1: Create/update the master Image_Metrics.csv as the first step
+                    if self.check_stop_flag():
+                        return
+                        
                     self.log_message("STEP 1: Creating/updating master Image_Metrics.csv...")
                     try:
                         # Use the PhinsData file path for navigation integration
@@ -274,12 +367,20 @@ class ProcessingController:
                         self.log_message(f"⚠ Error creating Image_Metrics.csv: {e}")
                         self.log_message("Processing will continue without master CSV")
                     
+                    # Check stop flag before processing stages
+                    if self.check_stop_flag():
+                        return
+                    
                     # STEP 2: Process each stage
                     self.log_message("STEP 2: Processing individual analysis stages...")
                     completed_stages = 0
                     total_stages = len(processing_stages)
                     
                     for stage_idx, (stage_name, stage_func) in enumerate(processing_stages):
+                        # Check stop flag before each stage
+                        if self.check_stop_flag():
+                            return
+                            
                         try:
                             # Calculate progress
                             base_progress = 40 if lls_selected else 20  # Account for LLS processing
@@ -316,6 +417,10 @@ class ProcessingController:
                     else:
                         self.log_message(f"⚠ Imagery processing completed with {total_stages - completed_stages} errors")
             
+            # Final check before completion
+            if self.check_stop_flag():
+                return
+            
             # Final overall summary
             total_processes = (1 if nav_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
             self.log_message(f"\n{'='*60}")
@@ -340,9 +445,10 @@ class ProcessingController:
             self.play_completion_sound()
             
         except Exception as e:
-            self.log_message(f"Error during processing: {str(e)}")
-            self.log_message(f"Traceback: {traceback.format_exc()}")
-            self.update_progress(0, "Error during processing")
+            if not self.stop_processing_flag:  # Only log errors if not intentionally stopped
+                self.log_message(f"Error during processing: {str(e)}")
+                self.log_message(f"Traceback: {traceback.format_exc()}")
+                self.update_progress(0, "Error during processing")
         finally:
             # Re-enable the process button
             if hasattr(self, 'process_button'):
@@ -929,21 +1035,34 @@ class ProcessingController:
             
             # Process each row in the CSV
             for index, row in df.iterrows():
+                # Check stop flag before each job
+                if self.check_stop_flag():
+                    self.log_message(f"Batch processing stopped at job {index + 1}/{len(df)}")
+                    break
+                
                 job_num = index + 1
                 self.log_message(f"\n{'='*60}")
                 self.log_message(f"PROCESSING JOB {job_num}/{len(df)}")
                 self.log_message(f"{'='*60}")
                 
                 try:
-                    # Set up job-specific paths using standardized column names
+                    # Set up job-specific paths using both old and new column names for backward compatibility
                     input_folder = str(row.get('Image_Input', '')).strip() if pd.notna(row.get('Image_Input', '')) else ''
                     output_folder = str(row.get('Output_folder', '')).strip() if pd.notna(row.get('Output_folder', '')) else ''
+                    
+                    # Support both old and new column names for nav file
                     nav_file = str(row.get('Dive_Nav_file', '')).strip() if pd.notna(row.get('Dive_Nav_file', '')) else ''
+                    if not nav_file:  # Try alternative column name
+                        nav_file = str(row.get('dive_nav_file', '')).strip() if pd.notna(row.get('dive_nav_file', '')) else ''
+                    
+                    # Navigation directory for nav processing module
+                    nav_directory = str(row.get('nav_directory', '')).strip() if pd.notna(row.get('nav_directory', '')) else ''
+                    
                     lls_folder = str(row.get('LLS_Input', '')).strip() if pd.notna(row.get('LLS_Input', '')) else ''
                     phins_nav_file = str(row.get('PhinsData_Bin_file', '')).strip() if pd.notna(row.get('PhinsData_Bin_file', '')) else ''
                     phins_data_nav_file = str(row.get('PhinsData_Nav_file', '')).strip() if pd.notna(row.get('PhinsData_Nav_file', '')) else ''
                     
-                    # Navigation module files
+                    # Navigation module files (may not be present in all CSV formats)
                     nav_state_file = str(row.get('NAV_STATE_file', '')).strip() if pd.notna(row.get('NAV_STATE_file', '')) else ''
                     phins_ins_file = str(row.get('PHINS_INS_file', '')).strip() if pd.notna(row.get('PHINS_INS_file', '')) else ''
                     
@@ -951,6 +1070,7 @@ class ProcessingController:
                     input_folder = input_folder if input_folder else None
                     output_folder = output_folder if output_folder else None
                     nav_file = nav_file if nav_file else None
+                    nav_directory = nav_directory if nav_directory else None
                     lls_folder = lls_folder if lls_folder else None
                     phins_nav_file = phins_nav_file if phins_nav_file else None
                     phins_data_nav_file = phins_data_nav_file if phins_data_nav_file else None
@@ -964,13 +1084,13 @@ class ProcessingController:
                         continue
                     
                     # Check if we have inputs for at least one processing module
-                    has_nav_module = nav_state_file  # Navigation module needs NAV_STATE_file
+                    has_nav_module = nav_directory or nav_state_file  # Navigation module needs nav_directory OR NAV_STATE_file
                     has_image_module = input_folder
                     has_lls_module = lls_folder and phins_nav_file
                     
                     if not (has_nav_module or has_image_module or has_lls_module):
                         self.log_message(f"Job {job_num}: Skipping - no valid processing module inputs specified")
-                        self.log_message(f"  Navigation module needs: NAV_STATE_file")
+                        self.log_message(f"  Navigation module needs: nav_directory OR NAV_STATE_file")
                         self.log_message(f"  Image module needs: Image_Input")
                         self.log_message(f"  LLS module needs: LLS_Input and PhinsData_Bin_file")
                         failed_jobs += 1
@@ -990,14 +1110,22 @@ class ProcessingController:
                     self.update_progress(progress, f"Processing job {job_num}/{len(df)}")
                     
                     # Process this job
-                    self.process_single_batch_job(
+                    job_success = self.process_single_batch_job(
                         job_num, input_folder, output_folder, 
                         nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
-                        nav_state_file, phins_ins_file
+                        nav_state_file, phins_ins_file, nav_directory
                     )
                     
-                    self.log_message(f"Job {job_num} completed successfully")
-                    successful_jobs += 1
+                    # Check if processing was stopped during the job
+                    if self.stop_processing_flag:
+                        break
+                    
+                    if job_success:
+                        self.log_message(f"Job {job_num} completed successfully")
+                        successful_jobs += 1
+                    else:
+                        self.log_message(f"Job {job_num} failed")
+                        failed_jobs += 1
                     
                 except Exception as e:
                     self.log_message(f"Error in job {job_num}: {str(e)}")
@@ -1006,27 +1134,49 @@ class ProcessingController:
             
             # Final summary
             self.log_message(f"\n{'='*60}")
-            self.log_message(f"BATCH PROCESSING SUMMARY")
+            if self.stop_processing_flag:
+                self.log_message(f"BATCH PROCESSING STOPPED BY USER")
+            else:
+                self.log_message(f"BATCH PROCESSING SUMMARY")
             self.log_message(f"{'='*60}")
             self.log_message(f"Total jobs: {len(df)}")
             self.log_message(f"Successful: {successful_jobs}")
             self.log_message(f"Failed: {failed_jobs}")
-            self.log_message(f"Success rate: {(successful_jobs/len(df)*100):.1f}%")
-            self.log_message(f"Batch processing completed!")
+            if successful_jobs + failed_jobs > 0:
+                self.log_message(f"Success rate: {(successful_jobs/(successful_jobs + failed_jobs)*100):.1f}%")
             
-            self.update_progress(100, "Batch processing complete")
-            self.play_completion_sound()
+            if not self.stop_processing_flag:
+                self.log_message(f"Batch processing completed!")
+                self.update_progress(100, "Batch processing complete")
+                self.play_completion_sound()
             
         except Exception as e:
-            self.log_message(f"Error during batch processing: {str(e)}")
-            self.log_message(traceback.format_exc())
+            if not self.stop_processing_flag:  # Only log errors if not intentionally stopped
+                self.log_message(f"Error during batch processing: {str(e)}")
+                self.log_message(traceback.format_exc())
         finally:
+            # Always clean up thread reference and reset UI state
+            self.current_processing_thread = None
+            
+            # Reset stop flag and message tracking for next run
+            self.stop_processing_flag = False
+            if hasattr(self, '_stop_message_logged'):
+                delattr(self, '_stop_message_logged')
+            
+            # Always re-enable process button and disable stop button
             self.root.after(0, lambda: self.process_button.configure(state=tk.NORMAL))
+            if hasattr(self, 'stop_button'):
+                self.root.after(0, lambda: self.stop_button.configure(state=tk.DISABLED))
 
     def process_single_batch_job(self, job_num, input_folder, output_folder, 
                                 nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
-                                nav_state_file, phins_ins_file):
-        """Process a single job from the batch CSV - mirrors single dive processing"""
+                                nav_state_file, phins_ins_file, nav_directory=None):
+        """Process a single job from the batch CSV - mirrors single dive processing
+        Returns True if successful, False if failed or stopped"""
+        
+        # Check stop flag at start of each job
+        if self.check_stop_flag():
+            return False
         
         # Determine what processing is needed
         nav_selected = self.nav_processing_var.get()
@@ -1043,22 +1193,26 @@ class ProcessingController:
         self.log_message(f"Job {job_num} processing:")
         if nav_selected:
             self.log_message(f"  - Navigation processing: ENABLED")
+            if nav_directory:
+                self.log_message(f"  - Nav directory: {nav_directory}")
             if nav_state_file:
                 self.log_message(f"  - Nav state file: {nav_state_file}")
             if phins_ins_file:
                 self.log_message(f"  - PHINS INS file: {phins_ins_file}")
         if lls_selected:
+            self.log_message(f"  - LLS processing: ENABLED")
             self.log_message(f"  - LLS folder: {lls_folder}")
             self.log_message(f"  - Phins nav: {phins_nav_file}")
         if imagery_selected:
+            self.log_message(f"  - Imagery processing: ENABLED")
             self.log_message(f"  - Input folder: {input_folder}")
             if nav_file and os.path.exists(nav_file):
-                self.log_message(f"  - Nav file: {nav_file}")
+                self.log_message(f"  - Nav file for imagery: {nav_file}")
         self.log_message(f"  - Output folder: {output_folder}")
         
         if not nav_selected and not lls_selected and not imagery_selected:
             self.log_message(f"Job {job_num}: No processing functions selected - skipping")
-            return
+            return False
         
         # Save current paths and temporarily override for this job
         original_paths = self.save_current_paths()
@@ -1067,7 +1221,16 @@ class ProcessingController:
             # Set paths for this job
             if imagery_selected:
                 self.input_path.set(input_folder if input_folder else '')
-                self.nav_path.set(nav_file if nav_file and os.path.exists(nav_file) else '')
+                
+                # Debug navigation file setting
+                if nav_file:
+                    if os.path.exists(nav_file):
+                        self.nav_path.set(nav_file)
+                    else:
+                        self.nav_path.set('')
+                        self.log_message(f"Job {job_num}: ⚠ Nav file does not exist: {nav_file}")
+                else:
+                    self.nav_path.set('')
             else:
                 self.input_path.set('')
                 self.nav_path.set('')
@@ -1080,10 +1243,20 @@ class ProcessingController:
                 self.phins_nav_path.set('')
                 
             if nav_selected:
+                # Set navigation directory from CSV if provided
+                if nav_directory and os.path.exists(nav_directory):
+                    self.nav_directory_path.set(nav_directory)
+                    self.log_message(f"Job {job_num}: Navigation directory: {nav_directory}")
+                else:
+                    self.nav_directory_path.set('')
+                    if nav_directory:
+                        self.log_message(f"Job {job_num}: ⚠ Navigation directory not found: {nav_directory}")
+                
                 self.nav_plot_file_path.set(nav_state_file if nav_state_file and os.path.exists(nav_state_file) else '')
                 # Set PHINS INS file path for navigation processing (separate from LLS)
                 self.phins_ins_path.set(phins_ins_file if phins_ins_file and os.path.exists(phins_ins_file) else '')
             else:
+                self.nav_directory_path.set('')
                 self.nav_plot_file_path.set('')
                 self.phins_ins_path.set('')
                 
@@ -1093,6 +1266,9 @@ class ProcessingController:
             try:
                 # Process Navigation data first if selected
                 if nav_selected:
+                    if self.check_stop_flag():
+                        return False
+                        
                     self.log_message(f"Job {job_num}: Processing Navigation data...")
                     try:
                         self.process_navigation_data(output_folder)
@@ -1103,6 +1279,9 @@ class ProcessingController:
                 
                 # Process LLS data if selected
                 if lls_selected:
+                    if self.check_stop_flag():
+                        return False
+                        
                     self.log_message(f"Job {job_num}: Processing LLS data...")
                     if not lls_folder or not os.path.exists(lls_folder):
                         self.log_message(f"Job {job_num}: ✗ LLS folder not found: {lls_folder}")
@@ -1118,42 +1297,39 @@ class ProcessingController:
                 
                 # Process imagery data if selected
                 if imagery_selected:
+                    if self.check_stop_flag():
+                        return False
+                        
                     if not input_folder or not os.path.exists(input_folder):
                         self.log_message(f"Job {job_num}: ✗ Input folder not found: {input_folder}")
                     else:
-                        # Mirror the single processing structure exactly
+                        # Process imagery processing
                         self.log_message(f"Job {job_num}: Processing Imagery data...")
-                        self.log_message(f"Job {job_num}: ⚠ Note: All modules now use CSV-based processing for consistency")
                         
-                        # Load navigation data from dive nav text file ONLY for imagery
-                        nav_file_for_imagery = None
-                        if nav_file and os.path.exists(nav_file):
-                            nav_file_for_imagery = nav_file
-                            self.log_message(f"Job {job_num}: Navigation source for imagery: {os.path.basename(nav_file_for_imagery)} (Dive Nav text file)")
-                        else:
-                            self.log_message(f"Job {job_num}: ⚠ No Dive Nav text file specified for imagery processing")
-                        
-                        if nav_file_for_imagery:
-                            try:
-                                if self.load_navigation_data_for_imagery_only(nav_file_for_imagery):
-                                    self.log_message(f"Job {job_num}: ✓ Navigation data loaded successfully from text file for imagery processing")
-                                else:
-                                    self.log_message(f"Job {job_num}: ⚠ Navigation data load failed - continuing without it")
-                            except Exception as nav_error:
-                                self.log_message(f"Job {job_num}: ⚠ Navigation data error: {nav_error}")
-                        else:
-                            self.log_message(f"Job {job_num}: ⚠ No navigation file specified - continuing without navigation data")
+                        # Don't load navigation data here - let analyze_images handle it
+                        # Just ensure the nav_path is set correctly (which we did earlier)
                         
                         # Call the main imagery processing method
-                        self.analyze_images(input_folder, output_folder)
+                        # Pass flag to skip navigation processing since we already did it in batch mode
+                        self.analyze_images(input_folder, output_folder, skip_nav_processing=nav_selected)
+                        
+                        # Check if processing was stopped during imagery processing
+                        if self.check_stop_flag():
+                            return False
+                            
                         self.log_message(f"Job {job_num}: ✓ Imagery processing completed")
                 
+                # Check final stop flag
+                if self.check_stop_flag():
+                    return False
+                
                 self.log_message(f"Job {job_num}: ✓ All processing completed successfully")
+                return True
                 
             except Exception as processing_error:
                 self.log_message(f"Job {job_num}: ✗ Processing error: {processing_error}")
                 self.log_message(f"Job {job_num}: Traceback: {traceback.format_exc()}")
-                raise processing_error
+                return False
             
         finally:
             # Always restore original paths

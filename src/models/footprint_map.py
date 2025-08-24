@@ -7,6 +7,7 @@ import warnings
 import datetime
 from dateutil import parser
 import traceback
+from .metrics import Metrics
 
 # Try importing geopandas, but handle the case where it might not be installed
 try:
@@ -128,6 +129,8 @@ class FootprintMap:
                 if heading_col:
                     # Ensure heading is numeric
                     self.nav_data['Heading'] = pd.to_numeric(self.nav_data[heading_col], errors='coerce')
+                    # Normalize headings to 0-360 range
+                    self.nav_data['Heading'] = self.nav_data['Heading'].apply(lambda x: Metrics.normalize_heading(x) if pd.notna(x) else x)
                     print(f"Processed heading data from column: {heading_col}")
                     # Remove rows with missing heading
                     self.nav_data = self.nav_data.dropna(subset=['Heading'])
@@ -214,6 +217,8 @@ class FootprintMap:
                     print("Last navigation record:")
                     print(f"  Datetime: {self.nav_data['Datetime'].iloc[-1]}")
                     print(f"  Heading: {self.nav_data['Heading'].iloc[-1]}")
+                    print(f"DEBUG: Navigation heading range: {self.nav_data['Heading'].min():.1f}° to {self.nav_data['Heading'].max():.1f}°")
+                    print(f"DEBUG: Sample of navigation headings: {self.nav_data['Heading'].head(10).tolist()}")
                 
                 return True
                 
@@ -363,6 +368,14 @@ class FootprintMap:
         
         # Convert heading to radians
         heading_rad = np.radians(heading)
+        
+        # Debug output for first few calculations
+        if not hasattr(self, '_polygon_debug_count'):
+            self._polygon_debug_count = 0
+        
+        if self._polygon_debug_count < 3:
+            print(f"DEBUG: Polygon calculation - Heading: {heading:.1f}°, Width: {width:.1f}m, Height: {height:.1f}m")
+            self._polygon_debug_count += 1
         
         # Calculate the offset vectors in the heading direction and perpendicular to it
         # The heading direction corresponds to the short edge (height)
@@ -603,41 +616,52 @@ class FootprintMap:
             image_datetime = None
             
             try:
-                # Try to extract datetime from the point for nav matching
-                
-                # Try to get DateTime from EXIF
-                if 'DateTime' in point and point['DateTime'] and point['DateTime'] != 'N/A':
-                    try:
-                        # Handle common EXIF datetime format: "2024:06:27 07:49:38"
-                        if isinstance(point['DateTime'], str):
-                            if ':' in point['DateTime']:
-                                # Replace colons in date part with dashes for parsing
-                                date_time = point['DateTime'].replace(':', '-', 2)
-                                image_datetime = parser.parse(date_time)
-                            else:
-                                image_datetime = parser.parse(point['DateTime'])
-                        else:
-                            # If it's already a datetime object
-                            image_datetime = point['DateTime']
-                    except Exception as e:
-                        print(f"Error parsing DateTime from EXIF: {e}")
-                        
-                # Try from filename if DateTime not available from EXIF
-                if image_datetime is None and 'filename' in point:
-                    image_datetime = self._parse_datetime_from_filename(point['filename'])
-                    if image_datetime:
-                        print(f"Parsed datetime from filename: {image_datetime}")
-                
-                # If we have a datetime, count it for logging
-                if image_datetime:
-                    datetime_available_count += 1
+                # Check if heading is already available in the point data (from CSV)
+                if 'heading' in point and point['heading'] is not None:
+                    heading = Metrics.normalize_heading(float(point['heading']))
+                    match_found_count += 1
+                    print(f"DEBUG: Using CSV heading {heading:.1f}° for image {point.get('filename', 'unknown')}")
+                else:
+                    # If no heading in CSV, try to extract datetime from the point for nav matching
                     
-                    # Get heading from nav data
-                    if self.nav_data is not None:
-                        matched_heading = self._match_image_to_nav(image_datetime)
-                        if matched_heading is not None:
-                            heading = matched_heading
-                            match_found_count += 1
+                    # Try to get DateTime from EXIF
+                    if 'DateTime' in point and point['DateTime'] and point['DateTime'] != 'N/A':
+                        try:
+                            # Handle common EXIF datetime format: "2024:06:27 07:49:38"
+                            if isinstance(point['DateTime'], str):
+                                if ':' in point['DateTime']:
+                                    # Replace colons in date part with dashes for parsing
+                                    date_time = point['DateTime'].replace(':', '-', 2)
+                                    image_datetime = parser.parse(date_time)
+                                else:
+                                    image_datetime = parser.parse(point['DateTime'])
+                            else:
+                                # If it's already a datetime object
+                                image_datetime = point['DateTime']
+                        except Exception as e:
+                            print(f"Error parsing DateTime from EXIF: {e}")
+                            
+                    # Try from filename if DateTime not available from EXIF
+                    if image_datetime is None and 'filename' in point:
+                        image_datetime = self._parse_datetime_from_filename(point['filename'])
+                        if image_datetime:
+                            print(f"Parsed datetime from filename: {image_datetime}")
+                    
+                    # If we have a datetime, count it for logging
+                    if image_datetime:
+                        datetime_available_count += 1
+                        
+                        # Get heading from nav data
+                        if self.nav_data is not None:
+                            matched_heading = self._match_image_to_nav(image_datetime)
+                            if matched_heading is not None:
+                                heading = Metrics.normalize_heading(matched_heading)
+                                match_found_count += 1
+                                print(f"DEBUG: Using matched heading {heading:.1f}° for image at {image_datetime}")
+                            else:
+                                print(f"DEBUG: No nav match found for image at {image_datetime}, using default heading 0°")
+                        else:
+                            print("DEBUG: No navigation data available, using default heading 0°")
                 
                 # Calculate footprint dimensions
                 width, height = self._calculate_footprint(point['altitude'])
@@ -649,6 +673,10 @@ class FootprintMap:
                     point['altitude'], 
                     heading
                 )
+                
+                # Debug output for first few footprints
+                if len(footprints) < 3:
+                    print(f"DEBUG: Footprint {len(footprints)+1} - Lat: {point['latitude']:.6f}, Lon: {point['longitude']:.6f}, Alt: {point['altitude']:.1f}m, Heading: {heading:.1f}°")
                 
                 # Add footprint data to the point
                 footprint_data = {
@@ -671,7 +699,7 @@ class FootprintMap:
         
         print(f"Created {len(footprints)} footprints for mapping")
         print(f"Points with datetime: {datetime_available_count} of {len(valid_points)}")
-        print(f"Points with matched heading from nav: {match_found_count}")
+        print(f"Points with heading data (CSV or nav matched): {match_found_count}")
         
         if not footprints:
             print("No valid footprints could be calculated")
@@ -2090,6 +2118,7 @@ class FootprintMap:
     def identify_subsets(self, footprints: List[Dict], min_subset_size: int = 50) -> List[Dict]:
         """
         Identify meaningful subsets of the survey for creating zoomed maps
+        Enhanced to detect photogrammetric development areas with high overlap density
         
         Args:
             footprints: List of footprint data dictionaries
@@ -2118,7 +2147,13 @@ class FootprintMap:
             
             subsets = []
             
-            # If the dataset is large enough, create meaningful subsets
+            # PRIORITY 1: Detect photogrammetric development areas based on overlap density
+            photogrammetric_areas = self._detect_photogrammetric_areas(footprints, min_subset_size)
+            if photogrammetric_areas:
+                subsets.extend(photogrammetric_areas)
+                print(f"Found {len(photogrammetric_areas)} photogrammetric development areas")
+            
+            # If the dataset is large enough, create additional meaningful subsets
             if len(footprints) >= min_subset_size * 2:
                 
                 # Create geographic quadrants if the survey area is large enough
@@ -2143,25 +2178,37 @@ class FootprintMap:
                                 quad['lon_range'][0] <= fp['longitude'] <= quad['lon_range'][1]):
                                 quad_footprints.append(fp)
                         
-                        # Only create subset if it has enough data
+                        # Only create subset if it has enough data and isn't already covered by photogrammetric areas
                         if len(quad_footprints) >= min_subset_size:
-                            subset_lats = [fp['latitude'] for fp in quad_footprints]
-                            subset_lons = [fp['longitude'] for fp in quad_footprints]
+                            # Check if this quadrant significantly overlaps with any photogrammetric area
+                            overlaps_with_photogrammetric = False
+                            if photogrammetric_areas:
+                                for photo_area in photogrammetric_areas:
+                                    overlap_count = len([fp for fp in quad_footprints if fp in photo_area['footprints']])
+                                    overlap_ratio = overlap_count / len(quad_footprints)
+                                    if overlap_ratio > 0.7:  # If 70% overlap with photogrammetric area, skip
+                                        overlaps_with_photogrammetric = True
+                                        break
                             
-                            subsets.append({
-                                'name': f"{quad['name']} Quadrant",
-                                'footprints': quad_footprints,
-                                'bounds': {
-                                    'min_lat': min(subset_lats),
-                                    'max_lat': max(subset_lats),
-                                    'min_lon': min(subset_lons),
-                                    'max_lon': max(subset_lons)
-                                },
-                                'count': len(quad_footprints)
-                            })
+                            if not overlaps_with_photogrammetric:
+                                subset_lats = [fp['latitude'] for fp in quad_footprints]
+                                subset_lons = [fp['longitude'] for fp in quad_footprints]
+                                
+                                subsets.append({
+                                    'name': f"{quad['name']} Quadrant",
+                                    'footprints': quad_footprints,
+                                    'bounds': {
+                                        'min_lat': min(subset_lats),
+                                        'max_lat': max(subset_lats),
+                                        'min_lon': min(subset_lons),
+                                        'max_lon': max(subset_lons)
+                                    },
+                                    'count': len(quad_footprints),
+                                    'type': 'geographic'
+                                })
                 
-                # Create temporal subsets (first half, second half)
-                if len(footprints) >= min_subset_size * 2:
+                # Create temporal subsets (first half, second half) only if no photogrammetric areas found
+                if len(footprints) >= min_subset_size * 2 and not photogrammetric_areas:
                     sorted_footprints = sorted(footprints, key=lambda x: x['filename'])
                     
                     mid_point = len(sorted_footprints) // 2
@@ -2181,7 +2228,8 @@ class FootprintMap:
                                 'min_lon': min(first_lons),
                                 'max_lon': max(first_lons)
                             },
-                            'count': len(first_half)
+                            'count': len(first_half),
+                            'type': 'temporal'
                         })
                     
                     # Second half
@@ -2199,7 +2247,8 @@ class FootprintMap:
                                 'min_lon': min(second_lons),
                                 'max_lon': max(second_lons)
                             },
-                            'count': len(second_half)
+                            'count': len(second_half),
+                            'type': 'temporal'
                         })
             
             # If no meaningful subsets were created, create a single subset of the densest area
@@ -2231,18 +2280,301 @@ class FootprintMap:
                             'min_lon': min(central_lons),
                             'max_lon': max(central_lons)
                         },
-                        'count': len(central_footprints)
+                        'count': len(central_footprints),
+                        'type': 'density'
                     })
             
             print(f"Identified {len(subsets)} subsets for zoomed analysis:")
             for subset in subsets:
-                print(f"  - {subset['name']}: {subset['count']} images")
+                subset_type = subset.get('type', 'unknown')
+                print(f"  - {subset['name']} ({subset_type}): {subset['count']} images")
             
             return subsets
             
         except Exception as e:
             print(f"Error identifying subsets: {e}")
             print(traceback.format_exc())
+            return []
+
+    def _detect_photogrammetric_areas(self, footprints: List[Dict], min_subset_size: int = 50) -> List[Dict]:
+        """
+        Detect photogrammetric development areas based on high overlap density and tight image spacing
+        
+        Args:
+            footprints: List of footprint data dictionaries
+            min_subset_size: Minimum number of footprints to consider as a subset
+            
+        Returns:
+            List of photogrammetric area dictionaries
+        """
+        try:
+            print("Analyzing survey for photogrammetric development areas...")
+            
+            # Calculate image spacing and density for each footprint
+            footprint_densities = []
+            
+            for i, fp in enumerate(footprints):
+                # Calculate local density by counting nearby footprints
+                nearby_count = 0
+                total_distance = 0
+                
+                for j, other_fp in enumerate(footprints):
+                    if i == j:
+                        continue
+                    
+                    # Calculate approximate distance in meters
+                    lat_diff = fp['latitude'] - other_fp['latitude']
+                    lon_diff = fp['longitude'] - other_fp['longitude']
+                    
+                    # Convert to approximate meters (rough calculation)
+                    lat_meters = lat_diff * 111320  # meters per degree latitude
+                    lon_meters = lon_diff * 111320 * np.cos(np.radians(fp['latitude']))  # adjusted for longitude
+                    distance = (lat_meters**2 + lon_meters**2)**0.5
+                    
+                    # Count footprints within 100m as "nearby" for density calculation
+                    if distance <= 100:
+                        nearby_count += 1
+                        total_distance += distance
+                
+                # Calculate density metrics
+                avg_distance = total_distance / max(nearby_count, 1)
+                
+                footprint_densities.append({
+                    'index': i,
+                    'footprint': fp,
+                    'nearby_count': nearby_count,
+                    'avg_distance': avg_distance,
+                    'latitude': fp['latitude'],
+                    'longitude': fp['longitude']
+                })
+            
+            # Sort by density (high nearby count + low average distance = high density)
+            footprint_densities.sort(key=lambda x: (-x['nearby_count'], x['avg_distance']))
+            
+            # Identify high-density clusters
+            high_density_threshold = np.percentile([fd['nearby_count'] for fd in footprint_densities], 75)
+            low_distance_threshold = np.percentile([fd['avg_distance'] for fd in footprint_densities], 25)
+            
+            print(f"Density thresholds: nearby_count >= {high_density_threshold:.1f}, avg_distance <= {low_distance_threshold:.1f}m")
+            
+            # Find dense regions
+            dense_footprints = [
+                fd for fd in footprint_densities 
+                if fd['nearby_count'] >= high_density_threshold and fd['avg_distance'] <= low_distance_threshold
+            ]
+            
+            if len(dense_footprints) < min_subset_size:
+                print("No significant high-density areas detected")
+                return []
+            
+            print(f"Found {len(dense_footprints)} high-density footprints")
+            
+            # Cluster dense footprints into contiguous areas using spatial clustering
+            from sklearn.cluster import DBSCAN
+            import numpy as np
+            
+            # Prepare coordinates for clustering
+            coords = np.array([[fd['latitude'], fd['longitude']] for fd in dense_footprints])
+            
+            # Use DBSCAN to find spatial clusters
+            # eps parameter: maximum distance between samples (in degrees, roughly 0.001° ≈ 100m)
+            eps = 0.001  # approximately 100m at most latitudes
+            min_samples = max(5, min_subset_size // 10)  # minimum samples to form a cluster
+            
+            clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(coords)
+            
+            # Group footprints by cluster
+            clusters = {}
+            for i, label in enumerate(clustering.labels_):
+                if label == -1:  # Noise point
+                    continue
+                if label not in clusters:
+                    clusters[label] = []
+                clusters[label].append(dense_footprints[i])
+            
+            print(f"Found {len(clusters)} distinct high-density clusters")
+            
+            # Create photogrammetric area subsets
+            photogrammetric_areas = []
+            
+            for cluster_id, cluster_footprints in clusters.items():
+                if len(cluster_footprints) >= min_subset_size:
+                    # Extract just the footprint data
+                    cluster_fps = [cf['footprint'] for cf in cluster_footprints]
+                    
+                    # Calculate bounds
+                    cluster_lats = [fp['latitude'] for fp in cluster_fps]
+                    cluster_lons = [fp['longitude'] for fp in cluster_fps]
+                    
+                    # Calculate area characteristics
+                    lat_range = max(cluster_lats) - min(cluster_lats)
+                    lon_range = max(cluster_lons) - min(cluster_lons)
+                    
+                    # Calculate average density metrics for this cluster
+                    avg_nearby = np.mean([cf['nearby_count'] for cf in cluster_footprints])
+                    avg_distance = np.mean([cf['avg_distance'] for cf in cluster_footprints])
+                    
+                    area_name = f"Photogrammetric Area {cluster_id + 1}"
+                    
+                    photogrammetric_areas.append({
+                        'name': area_name,
+                        'footprints': cluster_fps,
+                        'bounds': {
+                            'min_lat': min(cluster_lats),
+                            'max_lat': max(cluster_lats),
+                            'min_lon': min(cluster_lons),
+                            'max_lon': max(cluster_lons)
+                        },
+                        'count': len(cluster_fps),
+                        'type': 'photogrammetric',
+                        'characteristics': {
+                            'avg_nearby_count': avg_nearby,
+                            'avg_distance_m': avg_distance,
+                            'lat_range': lat_range,
+                            'lon_range': lon_range,
+                            'area_deg2': lat_range * lon_range
+                        }
+                    })
+                    
+                    print(f"  - {area_name}: {len(cluster_fps)} images, "
+                          f"avg density: {avg_nearby:.1f} nearby, {avg_distance:.1f}m spacing")
+            
+            # Sort by size (largest first)
+            photogrammetric_areas.sort(key=lambda x: x['count'], reverse=True)
+            
+            return photogrammetric_areas
+            
+        except ImportError:
+            print("sklearn not available for clustering, falling back to simple density detection")
+            return self._detect_photogrammetric_areas_simple(footprints, min_subset_size)
+        except Exception as e:
+            print(f"Error detecting photogrammetric areas: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def _detect_photogrammetric_areas_simple(self, footprints: List[Dict], min_subset_size: int = 50) -> List[Dict]:
+        """
+        Simple photogrammetric area detection without sklearn dependency
+        
+        Args:
+            footprints: List of footprint data dictionaries
+            min_subset_size: Minimum number of footprints to consider as a subset
+            
+        Returns:
+            List of photogrammetric area dictionaries
+        """
+        try:
+            print("Using simple density detection (sklearn not available)")
+            
+            # Calculate grid-based density
+            lats = [fp['latitude'] for fp in footprints]
+            lons = [fp['longitude'] for fp in footprints]
+            
+            min_lat, max_lat = min(lats), max(lats)
+            min_lon, max_lon = min(lons), max(lons)
+            
+            # Create a grid and count footprints in each cell
+            grid_size = 20  # 20x20 grid
+            lat_step = (max_lat - min_lat) / grid_size
+            lon_step = (max_lon - min_lon) / grid_size
+            
+            if lat_step == 0 or lon_step == 0:
+                return []
+            
+            grid_counts = {}
+            grid_footprints = {}
+            
+            for fp in footprints:
+                # Find grid cell
+                lat_idx = min(int((fp['latitude'] - min_lat) / lat_step), grid_size - 1)
+                lon_idx = min(int((fp['longitude'] - min_lon) / lon_step), grid_size - 1)
+                cell = (lat_idx, lon_idx)
+                
+                if cell not in grid_counts:
+                    grid_counts[cell] = 0
+                    grid_footprints[cell] = []
+                
+                grid_counts[cell] += 1
+                grid_footprints[cell].append(fp)
+            
+            # Find high-density cells
+            if not grid_counts:
+                return []
+            
+            avg_density = np.mean(list(grid_counts.values()))
+            high_density_threshold = avg_density * 2  # Cells with 2x average density
+            
+            print(f"Grid density analysis: avg={avg_density:.1f}, threshold={high_density_threshold:.1f}")
+            
+            # Group adjacent high-density cells
+            high_density_cells = [cell for cell, count in grid_counts.items() if count >= high_density_threshold]
+            
+            if not high_density_cells:
+                return []
+            
+            # Simple clustering: group adjacent cells
+            clusters = []
+            remaining_cells = set(high_density_cells)
+            
+            while remaining_cells:
+                # Start a new cluster
+                current_cluster = set()
+                to_process = [remaining_cells.pop()]
+                
+                while to_process:
+                    cell = to_process.pop()
+                    current_cluster.add(cell)
+                    
+                    # Find adjacent cells
+                    lat_idx, lon_idx = cell
+                    for dlat in [-1, 0, 1]:
+                        for dlon in [-1, 0, 1]:
+                            if dlat == 0 and dlon == 0:
+                                continue
+                            adjacent = (lat_idx + dlat, lon_idx + dlon)
+                            if adjacent in remaining_cells:
+                                remaining_cells.remove(adjacent)
+                                to_process.append(adjacent)
+                
+                clusters.append(current_cluster)
+            
+            # Convert clusters to photogrammetric areas
+            photogrammetric_areas = []
+            
+            for i, cluster_cells in enumerate(clusters):
+                # Collect all footprints in this cluster
+                cluster_footprints = []
+                for cell in cluster_cells:
+                    cluster_footprints.extend(grid_footprints[cell])
+                
+                if len(cluster_footprints) >= min_subset_size:
+                    cluster_lats = [fp['latitude'] for fp in cluster_footprints]
+                    cluster_lons = [fp['longitude'] for fp in cluster_footprints]
+                    
+                    photogrammetric_areas.append({
+                        'name': f"High-Density Area {i + 1}",
+                        'footprints': cluster_footprints,
+                        'bounds': {
+                            'min_lat': min(cluster_lats),
+                            'max_lat': max(cluster_lats),
+                            'min_lon': min(cluster_lons),
+                            'max_lon': max(cluster_lons)
+                        },
+                        'count': len(cluster_footprints),
+                        'type': 'photogrammetric',
+                        'characteristics': {
+                            'cells_in_cluster': len(cluster_cells),
+                            'density_ratio': len(cluster_footprints) / len(cluster_cells) / avg_density
+                        }
+                    })
+                    
+                    print(f"  - High-Density Area {i + 1}: {len(cluster_footprints)} images")
+            
+            return photogrammetric_areas
+            
+        except Exception as e:
+            print(f"Error in simple photogrammetric detection: {e}")
             return []
 
     def create_zoomed_maps(self, footprints: List[Dict], subsets: List[Dict], output_path: str):
