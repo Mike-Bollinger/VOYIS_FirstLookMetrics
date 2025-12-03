@@ -199,12 +199,12 @@ class UIComponents:
         )
         self.nav_processing_checkbox.grid(row=0, column=0, sticky='w', columnspan=3)
         
-        # Navigation file selection
-        ttk.Label(nav_section, text="Navigation File:").grid(row=1, column=0, sticky='w', padx=(20, 5))
-        self.nav_file_entry = ttk.Entry(nav_section, textvariable=self.nav_file_path, width=35)
-        self.nav_file_entry.grid(row=1, column=1, padx=5, sticky='ew')
-        self.nav_file_button = ttk.Button(nav_section, text="Browse...", command=self.select_nav_file_for_plotting)
-        self.nav_file_button.grid(row=1, column=2)
+        # Navigation directory selection (directory-only mode)
+        ttk.Label(nav_section, text="Navigation Directory:").grid(row=1, column=0, sticky='w', padx=(20, 5))
+        self.nav_directory_entry = ttk.Entry(nav_section, textvariable=self.nav_directory_path, width=35)
+        self.nav_directory_entry.grid(row=1, column=1, padx=5, sticky='ew')
+        self.nav_directory_button = ttk.Button(nav_section, text="Browse...", command=self.select_nav_directory)
+        self.nav_directory_button.grid(row=1, column=2)
 
     def _create_lls_processing_section(self):
         """Create LLS processing section"""

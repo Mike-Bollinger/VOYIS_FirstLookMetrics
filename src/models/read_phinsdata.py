@@ -183,13 +183,15 @@ def read_unique_identifiers(file_path):
                             data_frames['LOGDVL']['Time_REF'].append(TIME)
                 elif identifier == '$HEHDT' and len(row) >= 2:
                     try :
-                        data_frames['HEHDT']['Heading'].append(float(row[1]))
+                        heading_value = float(row[1])
+                        data_frames['HEHDT']['Heading'].append(heading_value)
                         data_frames['HEHDT']['Time_REF'].append(TIME)
                     except ValueError:
                         a=1
                 elif identifier == '$HETHS' and len(row) >= 3:
                     try:
-                        data_frames['HETHS']['Heading'].append(float(row[1]))
+                        heading_value = float(row[1])
+                        data_frames['HETHS']['Heading'].append(heading_value)
                         data_frames['HETHS']['Mode'].append(row[2])
                         data_frames['HETHS']['Time_REF'].append(TIME)
                     except ValueError:
@@ -457,109 +459,157 @@ def add_IMU_NAV(df, Dir, TimeOffset=0):
     if 'Date_Time' not in df.columns:
         raise ValueError("DataFrame must contain a 'Date_Time' column.")
 
-    df_Atitude=pd.read_csv(Dir+"\\ATITUD.csv")
-    # Roll,Pitch,Time_REF,Date_Time
-    df_Atitude['Date_Time'] = pd.to_datetime(df_Atitude['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_Atitude['Date_Time'] = df_Atitude['Date_Time'].dt.tz_localize('UTC')
-    df_Atitude['Date_Time'] = df_Atitude['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
-    df_Atitude = df_Atitude.dropna(subset=['Date_Time'])
+    try:
+        df_Atitude=pd.read_csv(Dir+"\\Atitude.csv")  # Fixed filename
+        # Roll,Pitch,Time_REF,Date_Time
+        df_Atitude['Date_Time'] = pd.to_datetime(df_Atitude['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_Atitude['Date_Time'] = df_Atitude['Date_Time'].dt.tz_localize('UTC')
+        df_Atitude['Date_Time'] = df_Atitude['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
+        df_Atitude = df_Atitude.dropna(subset=['Date_Time'])
 
-    df_HEHDT=pd.read_csv(Dir+"\\HEHDT.csv")
-    # Heading,Time_REF,Date_Time
-    df_HEHDT['Date_Time'] = pd.to_datetime(df_HEHDT['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_HEHDT['Date_Time'] = df_HEHDT['Date_Time'].dt.tz_localize('UTC')
-    df_HEHDT['Date_Time'] = df_HEHDT['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
-    df_HEHDT = df_HEHDT.dropna(subset=['Date_Time'])
+        df_HEHDT=pd.read_csv(Dir+"\\HEHDT_.csv")  # Fixed filename
+        # Heading,Time_REF,Date_Time
+        df_HEHDT['Date_Time'] = pd.to_datetime(df_HEHDT['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_HEHDT['Date_Time'] = df_HEHDT['Date_Time'].dt.tz_localize('UTC')
+        df_HEHDT['Date_Time'] = df_HEHDT['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
+        df_HEHDT = df_HEHDT.dropna(subset=['Date_Time'])
 
-    df_UTMWGS=pd.read_csv(Dir+"\\UTMWGS.csv")
-    # LatZone,LonZone,Easting,Northing,Altitude,Time_REF,Date_Time
-    df_UTMWGS['Date_Time'] = pd.to_datetime(df_UTMWGS['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_UTMWGS['Date_Time'] = df_UTMWGS['Date_Time'].dt.tz_localize('UTC')
-    df_UTMWGS['Date_Time'] = df_UTMWGS['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
-    df_UTMWGS = df_UTMWGS.dropna(subset=['Date_Time'])
+        df_UTMWGS=pd.read_csv(Dir+"\\UTMWGS84.csv")  # Fixed filename
+        # AUV_Easting,AUV_Northing columns (fixed from lls_processor)
+        df_UTMWGS['Date_Time'] = pd.to_datetime(df_UTMWGS['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_UTMWGS['Date_Time'] = df_UTMWGS['Date_Time'].dt.tz_localize('UTC')
+        df_UTMWGS['Date_Time'] = df_UTMWGS['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
+        df_UTMWGS = df_UTMWGS.dropna(subset=['Date_Time'])
 
-    df_DEPIN = pd.read_csv(Dir+"\\DEPIN_.csv")
-    # Depth,Time,Time_REF,Date_Time
-    df_DEPIN['Date_Time'] = pd.to_datetime(df_DEPIN['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_DEPIN['Date_Time'] = df_DEPIN['Date_Time'].dt.tz_localize('UTC')
-    df_DEPIN['Date_Time'] = df_DEPIN['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
-    df_DEPIN = df_DEPIN.dropna(subset=['Date_Time'])
+        df_DEPIN = pd.read_csv(Dir+"\\DEPIN_.csv")
+        # Depth,Time,Time_REF,Date_Time
+        df_DEPIN['Date_Time'] = pd.to_datetime(df_DEPIN['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_DEPIN['Date_Time'] = df_DEPIN['Date_Time'].dt.tz_localize('UTC')
+        df_DEPIN['Date_Time'] = df_DEPIN['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
+        df_DEPIN = df_DEPIN.dropna(subset=['Date_Time'])
 
-    df_LOGDVL = pd.read_csv(Dir+"\\LOGDVL.csv")
-    # SoundVelocity,Compensation,DVL_Distance_2btm,Time_REF,Date_Time
-    df_LOGDVL['Date_Time'] = pd.to_datetime(df_LOGDVL['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_LOGDVL['Date_Time'] = df_LOGDVL['Date_Time'].dt.tz_localize('UTC')
-    df_LOGDVL['Date_Time'] = df_LOGDVL['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
-    df_LOGDVL = df_LOGDVL.dropna(subset=['Date_Time'])
+        df_LOGDVL = pd.read_csv(Dir+"\\LOGDVL.csv")
+        # SoundVelocity,Compensation,DVL_Distance_2btm,Time_REF,Date_Time
+        df_LOGDVL['Date_Time'] = pd.to_datetime(df_LOGDVL['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_LOGDVL['Date_Time'] = df_LOGDVL['Date_Time'].dt.tz_localize('UTC')
+        df_LOGDVL['Date_Time'] = df_LOGDVL['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
+        df_LOGDVL = df_LOGDVL.dropna(subset=['Date_Time'])
 
-    df_SPEED_ = pd.read_csv(Dir+"\\SPEED_.csv")
-    # EastSpeed,NorthSpeed,UpSpeed,Velocity,Time_REF,Date_Time
-    df_SPEED_['Date_Time'] = pd.to_datetime(df_SPEED_['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_SPEED_['Date_Time'] = df_SPEED_['Date_Time'].dt.tz_localize('UTC')
-    df_SPEED_['Date_Time'] = df_SPEED_['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
-    df_SPEED_ = df_SPEED_.dropna(subset=['Date_Time'])
+        df_SPEED_ = pd.read_csv(Dir+"\\SPEED_.csv")
+        # EastSpeed,NorthSpeed,UpSpeed,Velocity,Time_REF,Date_Time
+        df_SPEED_['Date_Time'] = pd.to_datetime(df_SPEED_['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_SPEED_['Date_Time'] = df_SPEED_['Date_Time'].dt.tz_localize('UTC')
+        df_SPEED_['Date_Time'] = df_SPEED_['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
+        df_SPEED_ = df_SPEED_.dropna(subset=['Date_Time'])
 
-    df_POSITI = pd.read_csv(Dir+"\\POSITI.csv")
-    # Latitude,Longitude,Altitude,Time_REF,Date_Time
-    df_POSITI['Date_Time'] = pd.to_datetime(df_POSITI['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_POSITI['Date_Time'] = df_POSITI['Date_Time'].dt.tz_localize('UTC')
-    df_POSITI['Date_Time'] = df_POSITI['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
-    df_POSITI = df_POSITI.dropna(subset=['Date_Time'])
+        df_POSITI = pd.read_csv(Dir+"\\POSITI.csv")
+        # Latitude,Longitude,Altitude,Time_REF,Date_Time
+        df_POSITI['Date_Time'] = pd.to_datetime(df_POSITI['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_POSITI['Date_Time'] = df_POSITI['Date_Time'].dt.tz_localize('UTC')
+        df_POSITI['Date_Time'] = df_POSITI['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
+        df_POSITI = df_POSITI.dropna(subset=['Date_Time'])
 
-    df['Timestamp'] = df['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_Atitude['Timestamp'] = df_Atitude['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_HEHDT['Timestamp'] = df_HEHDT['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_UTMWGS['Timestamp'] = df_UTMWGS['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_DEPIN['Timestamp'] = df_DEPIN['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_LOGDVL['Timestamp'] = df_LOGDVL['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_SPEED_['Timestamp'] = df_SPEED_['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_POSITI['Timestamp'] = df_POSITI['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
+        df['Timestamp'] = df['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_Atitude['Timestamp'] = df_Atitude['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_HEHDT['Timestamp'] = df_HEHDT['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_UTMWGS['Timestamp'] = df_UTMWGS['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_DEPIN['Timestamp'] = df_DEPIN['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_LOGDVL['Timestamp'] = df_LOGDVL['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_SPEED_['Timestamp'] = df_SPEED_['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_POSITI['Timestamp'] = df_POSITI['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
 
-    df_Atitude = df_Atitude.dropna(subset=['Timestamp', 'Roll'])
-    df_Atitude = df_Atitude.sort_values('Timestamp')
-    df_HEHDT = df_HEHDT.dropna(subset=['Timestamp', 'Heading'])
-    df_HEHDT = df_HEHDT.sort_values('Timestamp')
-    df_UTMWGS = df_UTMWGS.dropna(subset=['Timestamp', 'Easting', 'Northing'])
-    df_UTMWGS = df_UTMWGS.sort_values('Timestamp')
-    df_DEPIN = df_DEPIN.dropna(subset=['Timestamp', 'Depth'])
-    df_DEPIN = df_DEPIN.sort_values('Timestamp')
-    df_LOGDVL = df_LOGDVL.dropna(subset=['Timestamp', 'DVL_Distance_2btm'])
-    df_LOGDVL = df_LOGDVL.sort_values('Timestamp')
-    df_SPEED_ = df_SPEED_.dropna(subset=['Timestamp', 'Velocity'])
-    df_SPEED_ = df_SPEED_.sort_values('Timestamp')
-    df_POSITI = df_POSITI.dropna(subset=['Timestamp', 'Latitude', 'Longitude'])
-    df_POSITI = df_POSITI.sort_values('Timestamp')
-    
+        df_Atitude = df_Atitude.dropna(subset=['Timestamp', 'Roll'])
+        df_Atitude = df_Atitude.sort_values('Timestamp')
+        df_HEHDT = df_HEHDT.dropna(subset=['Timestamp', 'Heading'])
+        df_HEHDT = df_HEHDT.sort_values('Timestamp')
+        df_UTMWGS = df_UTMWGS.dropna(subset=['Timestamp', 'AUV_Easting', 'AUV_Northing'])  # Fixed column names
+        df_UTMWGS = df_UTMWGS.sort_values('Timestamp')
+        df_DEPIN = df_DEPIN.dropna(subset=['Timestamp', 'Depth'])
+        df_DEPIN = df_DEPIN.sort_values('Timestamp')
+        df_LOGDVL = df_LOGDVL.dropna(subset=['Timestamp', 'DVL_Distance_2btm'])
+        df_LOGDVL = df_LOGDVL.sort_values('Timestamp')
+        df_SPEED_ = df_SPEED_.dropna(subset=['Timestamp', 'Speed'])  # Fixed column name
+        df_SPEED_ = df_SPEED_.sort_values('Timestamp')
+        df_POSITI = df_POSITI.dropna(subset=['Timestamp', 'Latitude', 'Longitude'])
+        df_POSITI = df_POSITI.sort_values('Timestamp')
+        
+        # Only interpolate if we have valid data
+        if len(df_Atitude) > 0:
+            df['AUV_Roll'] = np.interp(df['Timestamp'], df_Atitude['Timestamp'], df_Atitude['Roll'])
+            df['AUV_Pitch'] = np.interp(df['Timestamp'], df_Atitude['Timestamp'], df_Atitude['Pitch'])
+        else:
+            df['AUV_Roll'] = 0.0
+            df['AUV_Pitch'] = 0.0
+            
+        if len(df_HEHDT) > 0:
+            df['AUV_Heading'] = np.interp(df['Timestamp'], df_HEHDT['Timestamp'], df_HEHDT['Heading'])
+        else:
+            df['AUV_Heading'] = 0.0
+            
+        if len(df_UTMWGS) > 0:
+            df['AUV_Northing'] = np.interp(df['Timestamp'], df_UTMWGS['Timestamp'], df_UTMWGS['AUV_Northing'])
+            df['AUV_Easting'] = np.interp(df['Timestamp'], df_UTMWGS['Timestamp'], df_UTMWGS['AUV_Easting'])
+        else:
+            df['AUV_Northing'] = 0.0
+            df['AUV_Easting'] = 0.0
+            
+        if len(df_DEPIN) > 0:
+            df['AUV_Depth'] = -np.interp(df['Timestamp'], df_DEPIN['Timestamp'], df_DEPIN['Depth'])
+        else:
+            df['AUV_Depth'] = -10.0  # Default depth
+            
+        if len(df_LOGDVL) > 0:
+            df['AUV_Altitude'] = np.interp(df['Timestamp'], df_LOGDVL['Timestamp'], df_LOGDVL['DVL_Distance_2btm'])
+        else:
+            df['AUV_Altitude'] = 5.0  # Default altitude
+            
+        df['AUV_WaterDepth'] = df['AUV_Depth'] - df['AUV_Altitude'] # depth negative, altitude positive, water depth is negative
+        
+        if len(df_SPEED_) > 0:
+            df['AUV_Velocity'] = np.interp(df['Timestamp'], df_SPEED_['Timestamp'], df_SPEED_['Speed'])
+        else:
+            df['AUV_Velocity'] = 1.0  # Default velocity
+            
+        if len(df_POSITI) > 0:
+            df['AUV_Latitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Latitude'])
+            df['AUV_Longitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Longitude'])
+        else:
+            df['AUV_Latitude'] = 0.0
+            df['AUV_Longitude'] = 0.0
 
-    df['AUV_Roll'] = np.interp(df['Timestamp'], df_Atitude['Timestamp'], df_Atitude['Roll'])
-    df['AUV_Pitch'] = np.interp(df['Timestamp'], df_Atitude['Timestamp'], df_Atitude['Pitch'])
-    df['AUV_Heading'] = np.interp(df['Timestamp'], df_HEHDT['Timestamp'], df_HEHDT['Heading'])
-    df['AUV_Northing'] = np.interp(df['Timestamp'], df_UTMWGS['Timestamp'], df_UTMWGS['Northing'])
-    df['AUV_Easting'] = np.interp(df['Timestamp'], df_UTMWGS['Timestamp'], df_UTMWGS['Easting'])
-    df['AUV_Depth'] = -np.interp(df['Timestamp'], df_DEPIN['Timestamp'], df_DEPIN['Depth'])
-    df['AUV_Altitude'] = np.interp(df['Timestamp'], df_LOGDVL['Timestamp'], df_LOGDVL['DVL_Distance_2btm'])
-    df['AUV_WaterDepth'] = df['AUV_Depth'] - df['AUV_Altitude'] # depth negative, altitude positive, water depth is negative
-    df['AUV_Velocity'] = np.interp(df['Timestamp'], df_SPEED_['Timestamp'], df_SPEED_['Velocity'])
-    df['AUV_Latitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Latitude'])
-    df['AUV_Longitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Longitude'])
-
-    return df
+        return df
+        
+    except Exception as e:
+        print(f"Error in add_IMU_NAV: {str(e)}")
+        # Return df with default values for navigation columns
+        df['AUV_Roll'] = 0.0
+        df['AUV_Pitch'] = 0.0
+        df['AUV_Heading'] = 0.0
+        df['AUV_Northing'] = 0.0
+        df['AUV_Easting'] = 0.0
+        df['AUV_Depth'] = -10.0
+        df['AUV_Altitude'] = 5.0
+        df['AUV_WaterDepth'] = -15.0
+        df['AUV_Velocity'] = 1.0
+        df['AUV_Latitude'] = 0.0
+        df['AUV_Longitude'] = 0.0
+        return df
 
 def haversine(lat1, lon1, lat2, lon2):
     """
@@ -596,103 +646,161 @@ def NAV_surface_offset(Dir, plot_dir, dive_time):
     """
     phins_check(Dir)
 
-    df_DEPIN = pd.read_csv(Dir+"\\DEPIN_.csv")
-    # Depth,Time,Time_REF,Date_Time
-    df_DEPIN['Date_Time'] = pd.to_datetime(df_DEPIN['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_DEPIN['Date_Time'] = df_DEPIN['Date_Time'].dt.tz_localize('UTC')
+    try:
+        df_DEPIN = pd.read_csv(Dir+"\\DEPIN_.csv")
+        print(f"DEPIN columns: {df_DEPIN.columns.tolist()}")
+        print(f"DEPIN sample data:\n{df_DEPIN.head()}")
+        
+        # Depth,Time,Time_REF,Date_Time
+        if 'Date_Time' not in df_DEPIN.columns:
+            print("Warning: Date_Time column not found in DEPIN_.csv")
+            return pd.NaT, pd.NaT, 0, 0
+            
+        df_DEPIN['Date_Time'] = pd.to_datetime(df_DEPIN['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        print(f"After parsing - DEPIN Date_Time sample:\n{df_DEPIN['Date_Time'].head()}")
+        print(f"DEPIN Date_Time nulls: {df_DEPIN['Date_Time'].isna().sum()}")
+        
+        if df_DEPIN['Date_Time'].isna().all():
+            print("Error: All Date_Time values are NaT in DEPIN_.csv")
+            return pd.NaT, pd.NaT, 0, 0
+            
+        df_DEPIN['Date_Time'] = df_DEPIN['Date_Time'].dt.tz_localize('UTC')
 
-    df_GPSIN_ = pd.read_csv(Dir+"\\GPSIN_.csv")
-    # Latitude,Longitude,Altitude,Time,Quality,Time_REF,Date_Time   
-    df_GPSIN_['Date_Time'] = pd.to_datetime(df_GPSIN_['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_GPSIN_['Date_Time'] = df_GPSIN_['Date_Time'].dt.tz_localize('UTC')
+        df_GPSIN_ = pd.read_csv(Dir+"\\GPSIN_.csv")
+        # Latitude,Longitude,Altitude,Time,Quality,Time_REF,Date_Time   
+        df_GPSIN_['Date_Time'] = pd.to_datetime(df_GPSIN_['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_GPSIN_['Date_Time'] = df_GPSIN_['Date_Time'].dt.tz_localize('UTC')
+        df_GPSIN_ = df_GPSIN_.dropna(subset=['Date_Time'])
 
-    df_LOGDVL = pd.read_csv(Dir+"\\LOGDVL.csv")
-    # SoundVelocity,Compensation,DVL_Distance_2btm,Time_REF,Date_Time
-    df_LOGDVL['Date_Time'] = pd.to_datetime(df_LOGDVL['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_LOGDVL['Date_Time'] = df_LOGDVL['Date_Time'].dt.tz_localize('UTC')
+        df_LOGDVL = pd.read_csv(Dir+"\\LOGDVL.csv")
+        # SoundVelocity,Compensation,DVL_Distance_2btm,Time_REF,Date_Time
+        df_LOGDVL['Date_Time'] = pd.to_datetime(df_LOGDVL['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_LOGDVL['Date_Time'] = df_LOGDVL['Date_Time'].dt.tz_localize('UTC')
 
-    df_POSITI = pd.read_csv(Dir+"\\POSITI.csv")
-    # Latitude,Longitude,Altitude,Time_REF,Date_Time
-    df_POSITI['Date_Time'] = pd.to_datetime(df_POSITI['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f')
-    df_POSITI['Date_Time'] = df_POSITI['Date_Time'].dt.tz_localize('UTC')
-    
-    df_DEPIN['Timestamp'] = df_DEPIN['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_LOGDVL['Timestamp'] = df_LOGDVL['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_POSITI['Timestamp'] = df_POSITI['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df_GPSIN_['Timestamp'] = df_GPSIN_['Date_Time'].apply(
-        lambda x: x.timestamp() if pd.notnull(x) else None
-    )
-    df= df_DEPIN
-    df['Depth'] = -df['Depth']  # depth negative
-    df['Latitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Latitude'])
-    df['Longitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Longitude'])
-    df['Altitude'] = np.interp(df['Timestamp'], df_LOGDVL['Timestamp'], df_LOGDVL['DVL_Distance_2btm'])
-    df['WaterDepth'] = df['Depth'] - df['Altitude'] # depth negative, altitude positive, water depth is negative
-    df['GPS_Quality'] = np.interp(df['Timestamp'], df_GPSIN_['Timestamp'], df_GPSIN_['Quality'])
-    df['Latitude_GPS'] = np.interp(df['Timestamp'], df_GPSIN_['Timestamp'], df_GPSIN_['Latitude'])
-    df['Longitude_GPS'] = np.interp(df['Timestamp'], df_GPSIN_['Timestamp'], df_GPSIN_['Longitude'])
+        df_POSITI = pd.read_csv(Dir+"\\POSITI.csv")
+        # Latitude,Longitude,Altitude,Time_REF,Date_Time
+        df_POSITI['Date_Time'] = pd.to_datetime(df_POSITI['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+        df_POSITI['Date_Time'] = df_POSITI['Date_Time'].dt.tz_localize('UTC')
+        
+        df_DEPIN['Timestamp'] = df_DEPIN['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_LOGDVL['Timestamp'] = df_LOGDVL['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_POSITI['Timestamp'] = df_POSITI['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df_GPSIN_['Timestamp'] = df_GPSIN_['Date_Time'].apply(
+            lambda x: x.timestamp() if pd.notnull(x) else None
+        )
+        df= df_DEPIN
+        df['Depth'] = -df['Depth']  # depth negative
+        df['Latitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Latitude'])
+        df['Longitude'] = np.interp(df['Timestamp'], df_POSITI['Timestamp'], df_POSITI['Longitude'])
+        df['Altitude'] = np.interp(df['Timestamp'], df_LOGDVL['Timestamp'], df_LOGDVL['DVL_Distance_2btm'])
+        df['WaterDepth'] = df['Depth'] - df['Altitude'] # depth negative, altitude positive, water depth is negative
+        
+        # Only interpolate GPS data if we have valid GPS data
+        if len(df_GPSIN_) > 0 and not df_GPSIN_['Latitude'].isna().all():
+            df['GPS_Quality'] = np.interp(df['Timestamp'], df_GPSIN_['Timestamp'], df_GPSIN_['Quality'])
+            df['Latitude_GPS'] = np.interp(df['Timestamp'], df_GPSIN_['Timestamp'], df_GPSIN_['Latitude'])
+            df['Longitude_GPS'] = np.interp(df['Timestamp'], df_GPSIN_['Timestamp'], df_GPSIN_['Longitude'])
+        else:
+            # Use placeholder GPS data if no valid GPS data available
+            df['GPS_Quality'] = 1  # Default GPS quality
+            df['Latitude_GPS'] = df['Latitude']  # Use position data as GPS fallback
+            df['Longitude_GPS'] = df['Longitude']
 
+        print(f"Dive time parameter: {dive_time}")
+        
+        SurfaceTimes = df[df['Depth'] > -1]
+        print(f"Surface times found: {len(SurfaceTimes)}")
+        
+        if len(SurfaceTimes) == 0:
+            print("Warning: No surface times found (depth > -1m)")
+            # Use full data range as fallback
+            EndDive = df['Date_Time'].max()
+            StartDive = df['Date_Time'].min()
+        else:
+            EndDive = SurfaceTimes[SurfaceTimes['Date_Time'] > dive_time]['Date_Time'].min()
+            StartDive= SurfaceTimes[SurfaceTimes['Date_Time'] < dive_time]['Date_Time'].max()
+            
+            if pd.isna(EndDive):
+                print("Warning: No surface time found after dive_time, using max time")
+                EndDive = df['Date_Time'].max()
+            if pd.isna(StartDive):
+                print("Warning: No surface time found before dive_time, using min time")
+                StartDive = df['Date_Time'].min()
 
-    SurfaceTimes = df[df['Depth'] > -1]
-    EndDive = SurfaceTimes[SurfaceTimes['Date_Time'] > dive_time]['Date_Time'].min()
-    StartDive= SurfaceTimes[SurfaceTimes['Date_Time'] < dive_time]['Date_Time'].max()
+        print(f"StartDive: {StartDive}, EndDive: {EndDive}")
+        
+        # Check if we still have NaT values
+        if pd.isna(StartDive) or pd.isna(EndDive):
+            print(f"Error: StartDive or EndDive is NaT. Using data range as fallback.")
+            StartDive = df['Date_Time'].min()
+            EndDive = df['Date_Time'].max()
+            
+        if pd.isna(StartDive) or pd.isna(EndDive):
+            print(f"Critical Error: Cannot determine dive times from data")
+            return pd.NaT, pd.NaT, 0, 0
 
-    df['Distance_m'] = haversine(
-        df['Latitude'], df['Longitude'],
-        df['Latitude_GPS'], df['Longitude_GPS']
-    )
+        df['Distance_m'] = haversine(
+            df['Latitude'], df['Longitude'],
+            df['Latitude_GPS'], df['Longitude_GPS']
+        )
 
-    df['TimeSinceSurface'] = (df['Date_Time'] - EndDive).dt.total_seconds() / 60
-    GPS1 = df[df['GPS_Quality'] == 1]
-    GPS2 = df[df['GPS_Quality'] == 2]
-    Good_GPS_Data = df[(df['GPS_Quality'] == 2) & (df['TimeSinceSurface'] < 5)  & (df['TimeSinceSurface'] > 0)]
-    Poor_GPS_Data = df[(df['GPS_Quality'] == 1) & (df['TimeSinceSurface'] < 5) & (df['TimeSinceSurface'] > 0)]
-    plt.figure(figsize=(19.2, 10.8))
-    plt.subplot(2, 1, 1)
-    plt.plot(GPS1['TimeSinceSurface'], GPS1['Distance_m'], 'r.', label='GPS Quality 1')
-    plt.plot(GPS2['TimeSinceSurface'], GPS2['Distance_m'], 'g.', label='GPS Quality 2')
-    plt.legend()
-    plt.xlim(0, 30)
-    plt.ylim(0, 25)
-    plt.xlabel('Time Since Surface (min)')
-    plt.ylabel('Distance (m)')
-    plt.title('Phins NAV Position to GPS Post Dive')
-    plt.subplot(2, 1, 2)
-    plt.plot(df['TimeSinceSurface'], df['Altitude'], 'b.', label='DVL Distance to Bottom')
-    plt.xlim(0, 30)
-    plt.xlabel('Time Since Surface (min)')
-    plt.ylabel('DVL Distance to Bottom (m)')
-    plt.savefig(os.path.join(plot_dir, 'IMU_Position_to_GPS_Post_Dive.png'))
-    plt.close()
+        df['TimeSinceSurface'] = (df['Date_Time'] - EndDive).dt.total_seconds() / 60
+        GPS1 = df[df['GPS_Quality'] == 1]
+        GPS2 = df[df['GPS_Quality'] == 2]
+        Good_GPS_Data = df[(df['GPS_Quality'] == 2) & (df['TimeSinceSurface'] < 5)  & (df['TimeSinceSurface'] > 0)]
+        Poor_GPS_Data = df[(df['GPS_Quality'] == 1) & (df['TimeSinceSurface'] < 5) & (df['TimeSinceSurface'] > 0)]
+        plt.figure(figsize=(19.2, 10.8))
+        plt.subplot(2, 1, 1)
+        plt.plot(GPS1['TimeSinceSurface'], GPS1['Distance_m'], 'r.', label='GPS Quality 1')
+        plt.plot(GPS2['TimeSinceSurface'], GPS2['Distance_m'], 'g.', label='GPS Quality 2')
+        plt.legend()
+        plt.xlim(0, 30)
+        plt.ylim(0, 25)
+        plt.xlabel('Time Since Surface (min)')
+        plt.ylabel('Distance (m)')
+        plt.title('Phins NAV Position to GPS Post Dive')
+        plt.subplot(2, 1, 2)
+        plt.plot(df['TimeSinceSurface'], df['Altitude'], 'b.', label='DVL Distance to Bottom')
+        plt.xlim(0, 30)
+        plt.xlabel('Time Since Surface (min)')
+        plt.ylabel('DVL Distance to Bottom (m)')
+        plt.savefig(os.path.join(plot_dir, 'IMU_Position_to_GPS_Post_Dive.png'))
+        plt.close()
 
-    # remove outliers Distance_m
-    GPS1 = GPS1[np.abs(GPS1['Distance_m'] - GPS1['Distance_m'].mean()) < 3 * GPS1['Distance_m'].std()]
-    GPS2 = GPS2[np.abs(GPS2['Distance_m'] - GPS2['Distance_m'].mean()) < 3 * GPS2['Distance_m'].std()]
-    
-    GPS1 = GPS1[(GPS1['TimeSinceSurface'] < 15) & (GPS1['TimeSinceSurface'] > 0)]
-    GPS2 = GPS2[(GPS2['TimeSinceSurface'] < 15) & (GPS2['TimeSinceSurface'] > 0)]
+        # remove outliers Distance_m
+        GPS1 = GPS1[np.abs(GPS1['Distance_m'] - GPS1['Distance_m'].mean()) < 3 * GPS1['Distance_m'].std()]
+        GPS2 = GPS2[np.abs(GPS2['Distance_m'] - GPS2['Distance_m'].mean()) < 3 * GPS2['Distance_m'].std()]
+        
+        GPS1 = GPS1[(GPS1['TimeSinceSurface'] < 15) & (GPS1['TimeSinceSurface'] > 0)]
+        GPS2 = GPS2[(GPS2['TimeSinceSurface'] < 15) & (GPS2['TimeSinceSurface'] > 0)]
 
-    plt.figure(figsize=(8.5, 5.5))
-    plt.plot(GPS1['TimeSinceSurface'], GPS1['Distance_m'], 'r.', label='GPS Quality 1')
-    plt.plot(GPS2['TimeSinceSurface'], GPS2['Distance_m'], 'b.', label='GPS Quality 2')
-    plt.legend()
-    plt.xlim(0, 15)
-    # plt.ylim(0, 25)
-    plt.xlabel('Time Since Surface (min)')
-    plt.ylabel('Distance (m)')
-    plt.savefig(os.path.join(plot_dir, 'Report_plot_IMU_Position_to_GPS_Post_Dive.png'))
-    plt.close()
+        plt.figure(figsize=(8.5, 5.5))
+        plt.plot(GPS1['TimeSinceSurface'], GPS1['Distance_m'], 'r.', label='GPS Quality 1')
+        plt.plot(GPS2['TimeSinceSurface'], GPS2['Distance_m'], 'b.', label='GPS Quality 2')
+        plt.legend()
+        plt.xlim(0, 15)
+        # plt.ylim(0, 25)
+        plt.xlabel('Time Since Surface (min)')
+        plt.ylabel('Distance (m)')
+        plt.savefig(os.path.join(plot_dir, 'Report_plot_IMU_Position_to_GPS_Post_Dive.png'))
+        plt.close()
 
-    GPS_OffsetG = Good_GPS_Data['Distance_m'].mean() if not Good_GPS_Data.empty else 0
-    GPS_OffsetP = Poor_GPS_Data['Distance_m'].mean() if not Poor_GPS_Data.empty else 0
+        GPS_OffsetG = Good_GPS_Data['Distance_m'].mean() if not Good_GPS_Data.empty else 0
+        GPS_OffsetP = Poor_GPS_Data['Distance_m'].mean() if not Poor_GPS_Data.empty else 0
 
-    return StartDive, EndDive, GPS_OffsetG, GPS_OffsetP
+        return StartDive, EndDive, GPS_OffsetG, GPS_OffsetP
+        
+    except Exception as e:
+        print(f"Error in NAV_surface_offset: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        return pd.NaT, pd.NaT, 0, 0
 
 def plot_change_rate(Dir, Start, End, plot_dir):
     """

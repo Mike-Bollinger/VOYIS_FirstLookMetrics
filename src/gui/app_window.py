@@ -18,10 +18,14 @@ class AppWindow(UIComponents, ProcessingController):
         self.root.title("VOYIS First Look Metrics")
         self.root.geometry("1200x800")
         
+        # Initialize ProcessingController first
+        ProcessingController.__init__(self)
+        
         # Initialize variables
         self.setup_variables()
         
-        # Create UI FIRST (so log_text exists)
+        
+        # Create the user interface
         self.create_ui()
         
         # Set up UI update thread
@@ -61,9 +65,14 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Navigation processing paths (for plotting - text files with heave data)
         self.nav_processing_var = tk.BooleanVar(value=True)
-        self.nav_plot_file_path = tk.StringVar()  # NAV_STATE file
-        self.nav_state_file_path = tk.StringVar()  # NAV_STATE file (UI reference)
+        self.nav_plot_file_path = tk.StringVar()  # Primary NAV_STATE file (backward compatibility)
         self.phins_ins_path = tk.StringVar()  # PHINS INS file for navigation processing
+        
+        # Directory-based navigation system (only mode now)
+        self.nav_directory_path = tk.StringVar()  # Directory containing navigation files
+        
+        # Set navigation mode to directory only
+        self.nav_merge_mode = tk.StringVar(value='directory')
         
         # Batch processing
         self.batch_mode = False
@@ -102,7 +111,9 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Initialize lists for widgets
         self.input_widgets = []
-        self.single_mode_frames = []
+        self.single_mode_frames = []  # ADCP file
+        self.nav_veh_data_path = tk.StringVar()  # *_Veh_Data file
+        self.nav_other_files = []  # List for additional navigation files
 
     def initialize_processors(self):
         """Initialize all processing components"""
@@ -223,7 +234,7 @@ class AppWindow(UIComponents, ProcessingController):
         # Help text
         help_text = ttk.Label(
             self.batch_csv_frame,
-            text="CSV columns: input_folder*, output_folder*, nav_file, nav_plot_file, lls_folder, phins_nav_file (*required)",
+            text="Required: Output_folder. Optional: nav_directory (for navigation plots), Image_Input (for imagery), LLS_Input + PhinsData_Bin_file (for LLS).",
             font=('TkDefaultFont', 8),
             foreground='gray'
         )
@@ -246,22 +257,54 @@ class AppWindow(UIComponents, ProcessingController):
         nav_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         nav_frame.columnconfigure(1, weight=1)
         
-        # NAV_STATE file selection
-        ttk.Label(nav_frame, text="NAV_STATE Text File:").grid(row=0, column=0, sticky='w')
-        self.nav_state_entry = ttk.Entry(nav_frame, textvariable=self.nav_state_file_path, width=40)
-        self.nav_state_entry.grid(row=0, column=1, padx=5, sticky='ew')
-        self.nav_state_button = ttk.Button(nav_frame, text="Browse...", command=self.select_nav_state_file)
-        self.nav_state_button.grid(row=0, column=2)
+        # User guidance for navigation files
+        guidance_frame = ttk.Frame(nav_frame)
+        guidance_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         
-        # PHINS file selection for heave data
-        ttk.Label(nav_frame, text="PHINS INS Text File:").grid(row=1, column=0, sticky='w')
-        self.phins_ins_entry = ttk.Entry(nav_frame, textvariable=self.phins_ins_path, width=40)
-        self.phins_ins_entry.grid(row=1, column=1, padx=5, sticky='ew')
-        self.phins_ins_button = ttk.Button(nav_frame, text="Browse...", command=self.select_phins_ins_file)
-        self.phins_ins_button.grid(row=1, column=2)
+        guidance_text = (
+            "Smart Navigation Directory Selection: Select a directory containing your navigation files.\n"
+            "The system will automatically identify and prioritize: PHINS INS, NAV_STATE, STATE, ADCP, and *_Veh_Data files." 
+        )
+        guidance_label = ttk.Label(guidance_frame, text=guidance_text, 
+                                 wraplength=600, justify='left', 
+                                 font=('', 9), foreground='blue')
+        guidance_label.pack(anchor='w')
+        
+        # Directory selection frame (no mode selection - directory only)
+        self.directory_nav_frame = ttk.Frame(nav_frame)
+        self.directory_nav_frame.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(10, 0))
+        self.directory_nav_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(self.directory_nav_frame, text="Navigation Files Directory:").grid(row=0, column=0, sticky='w')
+        self.nav_directory_entry = ttk.Entry(self.directory_nav_frame, textvariable=self.nav_directory_path, width=50)
+        self.nav_directory_entry.grid(row=0, column=1, padx=5, sticky='ew')
+        self.nav_directory_button = ttk.Button(self.directory_nav_frame, text="Browse...", command=self.select_nav_directory)
+        self.nav_directory_button.grid(row=0, column=2)
+        
+        # Preview/scan button for directory mode
+        scan_frame = ttk.Frame(self.directory_nav_frame)
+        scan_frame.grid(row=1, column=0, columnspan=3, pady=(5, 0), sticky='ew')
+        
+        self.scan_nav_button = ttk.Button(
+            scan_frame, 
+            text="Preview Navigation Files", 
+            command=self.scan_navigation_directory,
+            style="AccentButton.TButton"
+        )
+        self.scan_nav_button.pack(side=tk.LEFT)
+        
+        ttk.Label(
+            scan_frame, 
+            text="Preview which navigation files will be used from the selected directory",
+            font=('TkDefaultFont', 8),
+            foreground='gray'
+        ).pack(side=tk.LEFT, padx=(10, 0))
         
         # Add nav plot widgets to list
-        self.input_widgets.extend([self.nav_state_entry, self.nav_state_button, self.phins_ins_entry, self.phins_ins_button])
+        self.nav_widgets = [
+            self.nav_directory_entry, self.nav_directory_button, self.scan_nav_button
+        ]
+        self.input_widgets.extend(self.nav_widgets)
         
         # LLS Input Section
         lls_frame = ttk.LabelFrame(self.input_frame, text="Laser Data (LLS) Inputs", padding="5")
@@ -450,16 +493,31 @@ class AppWindow(UIComponents, ProcessingController):
         threshold_entry.bind('<Return>', self.threshold_changed)
         threshold_entry.bind('<FocusOut>', self.threshold_changed)
         
-        # Process button
+        # Process and Stop buttons frame
+        buttons_frame = ttk.Frame(controls_frame)
+        buttons_frame.pack(pady=10, fill=tk.X)
+        
+        # Process button styling
         style = ttk.Style()
         style.configure("AccentButton.TButton", font=('', 10, 'bold'))
+        style.configure("StopButton.TButton", font=('', 10, 'bold'))
         
+        # Process button
         self.process_button = ttk.Button(
-            controls_frame, text="Process Images", 
+            buttons_frame, text="Process Images", 
             command=self.process_images,  # This comes from ProcessingController
             style="AccentButton.TButton"
         )
-        self.process_button.pack(pady=10)
+        self.process_button.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+        
+        # Stop button
+        self.stop_button = ttk.Button(
+            buttons_frame, text="Stop Processing", 
+            command=self.stop_processing,  # This comes from ProcessingController
+            style="StopButton.TButton",
+            state=tk.DISABLED  # Initially disabled
+        )
+        self.stop_button.pack(side=tk.RIGHT, fill=tk.X, expand=True)
 
     def create_log_section(self):
         """Create the log output section"""
@@ -565,20 +623,44 @@ class AppWindow(UIComponents, ProcessingController):
             self.phins_ins_path.set(file_path)
             self.log_message(f"PHINS INS file set to: {file_path}")
 
-    def select_nav_state_file(self):
-        """Select NAV_STATE file for navigation plotting"""
-        file_path = filedialog.askopenfilename(
-            title="Select NAV_STATE Text File",
-            filetypes=[
-                ("Text Files", "*.txt"),
-                ("CSV Files", "*.csv"),
-                ("All Files", "*.*")
-            ]
+    def select_nav_directory(self):
+        """Select directory containing navigation files"""
+        directory = filedialog.askdirectory(
+            title="Select Navigation Files Directory",
+            initialdir=self.nav_directory_path.get() or os.getcwd()
         )
-        if file_path:
-            self.nav_state_file_path.set(file_path)
-            self.nav_plot_file_path.set(file_path)  # Keep them synchronized
-            self.log_message(f"NAV_STATE file set to: {file_path}")
+        if directory:
+            self.nav_directory_path.set(directory)
+            self.log_message(f"Selected navigation directory: {directory}")
+
+    def scan_navigation_directory(self):
+        """Scan the selected directory for navigation files and show preview"""
+        directory = self.nav_directory_path.get()
+        if not directory:
+            messagebox.showwarning("No Directory", "Please select a navigation directory first.")
+            return
+        
+        try:
+            from src.models.nav_merger import scan_navigation_directory
+            
+            # Scan the directory
+            nav_files = scan_navigation_directory(directory, self.log_message)
+            
+            if nav_files:
+                # Show results in a popup
+                result_text = "Found navigation files in priority order:\n\n"
+                for file_type, file_path in nav_files.items():
+                    filename = os.path.basename(file_path)
+                    result_text += f"• {file_type}: {filename}\n"
+                
+                messagebox.showinfo("Navigation Files Found", result_text)
+            else:
+                messagebox.showwarning("No Files Found", 
+                                     "No valid navigation files found in the selected directory.\n\n"
+                                     "Expected file types: PHINS INS, NAV_STATE, STATE, ADCP, *_Veh_Data")
+        
+        except Exception as e:
+            messagebox.showerror("Scan Error", f"Error scanning directory: {str(e)}")
 
     def select_visibility_file(self, file_type):
         """Select model file or training data directory for visibility analyzer"""
@@ -709,7 +791,7 @@ class AppWindow(UIComponents, ProcessingController):
             
             # Required and optional column names
             required_cols = ['Output_folder']
-            optional_cols = ['NAV_STATE_file', 'PHINS_INS_file', 'LLS_Input', 'PhinsData_Bin_file', 'Image_Input', 'Dive_Nav_file']
+            optional_cols = ['nav_directory', 'LLS_Input', 'PhinsData_Bin_file', 'Image_Input']
             
             # Check if we have the required column
             missing_required = [col for col in required_cols if col not in df.columns]
@@ -728,13 +810,13 @@ class AppWindow(UIComponents, ProcessingController):
             # Show summary of what will be processed
             lls_count = df['LLS_Input'].notna().sum() if 'LLS_Input' in df.columns else 0
             imagery_count = df['Image_Input'].notna().sum() if 'Image_Input' in df.columns else 0
-            nav_count = df['NAV_STATE_file'].notna().sum() if 'NAV_STATE_file' in df.columns else 0
+            nav_count = df['nav_directory'].notna().sum() if 'nav_directory' in df.columns else 0
             
             self.log_message(f"  - {imagery_count} image analysis jobs")
             if lls_count > 0:
                 self.log_message(f"  - {lls_count} LLS processing jobs")
             if nav_count > 0:
-                self.log_message(f"  - {nav_count} navigation processing jobs")
+                self.log_message(f"  - {nav_count} navigation processing jobs (using directory auto-detection)")
             
             return True
             
@@ -754,13 +836,13 @@ class AppWindow(UIComponents, ProcessingController):
             try:
                 # Create template data with standardized column names
                 template_data = {
-                    'NAV_STATE_file': [
-                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/NAV_STATE.txt',
-                        'D:/AUV/VOYIS/PC-24-04/DIVE004/Vehicle_Data/NAV_STATE.txt'
+                    'nav_directory': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data',
+                        'D:/AUV/VOYIS/PC-24-04/DIVE004/Vehicle_Data'
                     ],
-                    'PHINS_INS_file': [
-                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/PHINS INS.txt',
-                        'D:/AUV/VOYIS/PC-24-03/DIVE004/Vehicle_Data/PHINS INS.txt'
+                    'dive_nav_file': [
+                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/DIVE003_Veh_Nav.txt',
+                        'D:/AUV/VOYIS/PC-24-04/DIVE004/Vehicle_Data/DIVE004_Veh_Nav.txt'
                     ],
                     'LLS_Input': [
                         'D:/AUV/VOYIS/PC-24-03/DIVE003/LLS',
@@ -773,10 +855,6 @@ class AppWindow(UIComponents, ProcessingController):
                     'Image_Input': [
                         'D:/AUV/VOYIS/PC-24-03/DIVE003/DIVE003_raw_jpg_advanced',
                         'D:/AUV/VOYIS/PC-24-04/DIVE004/DIVE004_raw_jpg_advanced'
-                    ],
-                    'Dive_Nav_file': [
-                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/DIVE003_NAV.txt',
-                        'D:/AUV/VOYIS/PC-24-05/DIVE005/Vehicle_Data/DIVE005_NAV.txt'
                     ],
                     'Output_folder': [
                         'D:/AUV/VOYIS/PC-24-03/DIVE003/Report_Plots',
@@ -793,8 +871,8 @@ class AppWindow(UIComponents, ProcessingController):
                     f"Batch processing CSV template created at:\n{file_path}\n\n"
                     "Edit this file with your actual folder paths, then load it for batch processing.\n\n"
                     "Required: Output_folder (always required)\n"
-                    "Navigation Module: NAV_STATE_file, PHINS_INS_file\n"
-                    "Image Analysis Module: Image_Input, Dive_Nav_file\n"
+                    "Navigation Module: nav_directory (auto-detects all nav files)\n"
+                    "Image Analysis Module: Image_Input, dive_nav_file (optional individual nav file for legacy imagery processing)\n"
                     "LLS Analysis Module: LLS_Input, PhinsData_Bin_file\n"
                     "Each module can be run independently."
                 )
@@ -814,6 +892,187 @@ class AppWindow(UIComponents, ProcessingController):
                 winsound.PlaySound(sound_path, winsound.SND_FILENAME)
         except Exception as e:
             print(f"Could not play sound: {str(e)}")
+
+    def validate_navigation_files(self):
+        """Scan selected navigation files and report missing required columns"""
+        from src.models.nav_merger import NavigationDataMerger
+        
+        # Get list of selected navigation files
+        nav_files = []
+        file_info = []
+        
+        if self.nav_phins_ins_path.get():
+            nav_files.append(self.nav_phins_ins_path.get())
+            file_info.append(("PHINS INS (Priority 1)", self.nav_phins_ins_path.get()))
+            
+        if self.nav_nav_state_path.get():
+            nav_files.append(self.nav_nav_state_path.get())
+            file_info.append(("NAV_STATE (Priority 2)", self.nav_nav_state_path.get()))
+            
+        if self.nav_state_only_path.get():
+            nav_files.append(self.nav_state_only_path.get())
+            file_info.append(("STATE (Priority 3)", self.nav_state_only_path.get()))
+            
+        if self.nav_adcp_path.get():
+            nav_files.append(self.nav_adcp_path.get())
+            file_info.append(("ADCP (Priority 4)", self.nav_adcp_path.get()))
+            
+        if self.nav_veh_data_path.get():
+            nav_files.append(self.nav_veh_data_path.get())
+            file_info.append(("Veh_Data (Priority 5)", self.nav_veh_data_path.get()))
+        
+        if not nav_files:
+            self.log_message("No navigation files selected to validate.")
+            return
+        
+        self.log_message(f"\n=== Navigation File Validation ===")
+        self.log_message(f"Scanning {len(nav_files)} navigation files...")
+        
+        # Initialize navigation merger for validation
+        nav_merger = NavigationDataMerger(self.log_message)
+        
+        required_columns = ['time', 'latitude', 'longitude', 'depth']
+        optional_columns = ['heading', 'pitch', 'roll', 'heave', 'altitude']
+        all_available_cols = set()
+        file_reports = []
+        
+        for (file_desc, file_path) in file_info:
+            self.log_message(f"\nAnalyzing: {file_desc}")
+            self.log_message(f"  File: {os.path.basename(file_path)}")
+            
+            try:
+                # Check if file exists
+                if not os.path.exists(file_path):
+                    self.log_message(f"  ❌ ERROR: File not found")
+                    continue
+                
+                # Identify file type
+                file_type = nav_merger.identify_file_type(file_path)
+                self.log_message(f"  📋 Detected type: {file_type}")
+                
+                # Try to load and get column info
+                try:
+                    df = nav_merger.load_and_standardize_file(file_path, file_type)
+                    if df is not None and not df.empty:
+                        available_cols = list(df.columns)
+                        standardized_cols = [col for col in available_cols if col in (required_columns + optional_columns)]
+                        all_available_cols.update(standardized_cols)
+                        
+                        # Check required columns
+                        missing_required = [col for col in required_columns if col not in available_cols]
+                        available_required = [col for col in required_columns if col in available_cols]
+                        
+                        # Check optional columns  
+                        available_optional = [col for col in optional_columns if col in available_cols]
+                        missing_optional = [col for col in optional_columns if col not in available_cols]
+                        
+                        self.log_message(f"  📊 Data rows: {len(df)}")
+                        self.log_message(f"  ✅ Required columns found: {available_required}")
+                        if missing_required:
+                            self.log_message(f"  ❌ Missing required: {missing_required}")
+                        else:
+                            self.log_message(f"  ✅ All required columns present!")
+                            
+                        if available_optional:
+                            self.log_message(f"  🔵 Optional columns found: {available_optional}")
+                        if missing_optional:
+                            self.log_message(f"  ⚪ Optional columns missing: {missing_optional}")
+                        
+                        file_reports.append({
+                            'file': file_desc,
+                            'path': file_path,
+                            'type': file_type,
+                            'rows': len(df),
+                            'required_available': available_required,
+                            'required_missing': missing_required,
+                            'optional_available': available_optional,
+                            'optional_missing': missing_optional,
+                            'status': 'OK' if not missing_required else 'MISSING_REQUIRED'
+                        })
+                        
+                    else:
+                        self.log_message(f"  ❌ ERROR: Could not load data from file")
+                        
+                except Exception as load_error:
+                    self.log_message(f"  ❌ ERROR loading file: {str(load_error)}")
+                    
+            except Exception as e:
+                self.log_message(f"  ❌ ERROR analyzing file: {str(e)}")
+        
+        # Summary report
+        self.log_message(f"\n=== Validation Summary ===")
+        
+        files_with_required = [r for r in file_reports if r['status'] == 'OK']
+        files_missing_required = [r for r in file_reports if r['status'] == 'MISSING_REQUIRED']
+        
+        if files_with_required:
+            self.log_message(f"✅ Files with all required columns ({len(files_with_required)}):")
+            for report in files_with_required:
+                self.log_message(f"   • {report['file']} ({report['rows']} rows)")
+        
+        if files_missing_required:
+            self.log_message(f"❌ Files missing required columns ({len(files_missing_required)}):")
+            for report in files_missing_required:
+                self.log_message(f"   • {report['file']}: missing {report['required_missing']}")
+        
+        # Overall coverage assessment
+        missing_overall = [col for col in required_columns if col not in all_available_cols]
+        available_overall = [col for col in required_columns if col in all_available_cols]
+        
+        self.log_message(f"\n📈 Overall Coverage Across All Files:")
+        self.log_message(f"✅ Available required data: {available_overall}")
+        if missing_overall:
+            self.log_message(f"❌ Still missing after combining files: {missing_overall}")
+            self.log_message(f"⚠️  WARNING: These attributes need to be added from additional sources")
+        else:
+            self.log_message(f"🎉 SUCCESS: All required navigation data will be available after merging!")
+        
+        # Optional coverage
+        available_optional_overall = [col for col in optional_columns if col in all_available_cols] 
+        missing_optional_overall = [col for col in optional_columns if col not in all_available_cols]
+        
+        if available_optional_overall:
+            self.log_message(f"🔵 Available optional data: {available_optional_overall}")
+        if missing_optional_overall:
+            self.log_message(f"⚪ Missing optional data: {missing_optional_overall}")
+            
+        self.log_message(f"=== End Validation ===\n")
+        
+        return file_reports
+
+    def quick_validate_nav_file(self, file_path, file_desc):
+        """Quickly validate a single navigation file and provide immediate feedback"""
+        try:
+            from src.models.nav_merger import NavigationDataMerger
+            
+            if not os.path.exists(file_path):
+                self.log_message(f"⚠️  {file_desc} file not found: {os.path.basename(file_path)}")
+                return
+            
+            nav_merger = NavigationDataMerger(self.log_message)
+            file_type = nav_merger.identify_file_type(file_path)
+            
+            # Quick check - just load headers and first few rows
+            try:
+                df = nav_merger.load_and_standardize_file(file_path, file_type)
+                if df is not None and not df.empty:
+                    required_columns = ['time', 'latitude', 'longitude', 'depth']
+                    available_required = [col for col in required_columns if col in df.columns]
+                    missing_required = [col for col in required_columns if col not in df.columns]
+                    
+                    if not missing_required:
+                        self.log_message(f"✅ {file_desc}: All required columns found ({len(df)} rows)")
+                    else:
+                        self.log_message(f"⚠️  {file_desc}: Missing required columns: {missing_required}")
+                        self.log_message(f"   Available: {available_required}")
+                else:
+                    self.log_message(f"❌ {file_desc}: Could not load data from file")
+                    
+            except Exception as e:
+                self.log_message(f"❌ {file_desc}: Error loading file - {str(e)}")
+                
+        except Exception as e:
+            self.log_message(f"❌ Error validating {file_desc}: {str(e)}")
 
 # Note: The following methods are inherited from ProcessingController:
     # - setup_ui_update_thread()

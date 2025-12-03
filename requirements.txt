@@ -1,10 +1,32 @@
-tkinter
+# Core GUI and System Libraries
+tkinter  # Usually comes with Python, but listed for completeness
+
+# Image Processing and Computer Vision
 Pillow>=9.0.0
+opencv-python>=4.5.0
+
+# Scientific Computing and Data Analysis
 numpy>=1.20.0
-opencv-python
+pandas>=1.3.0
+scipy>=1.7.0
+rtree
+
+# Plotting and Visualization
 matplotlib>=3.5.0
 seaborn>=0.11.0
-pandas>=1.3.0
+
+# Geographic Data Processing (Optional but recommended)
 geopandas>=0.10.0
 shapely>=1.8.0
-scipy>=1.7.0
+
+# Machine Learning (Used in some analysis modules)
+scikit-learn>=1.0.0
+
+# Date/Time Processing
+python-dateutil>=2.8.0
+
+# Enhanced GUI Features (Optional)
+tkinterdnd2>=0.3.0
+
+# File and Path Utilities (Python 3.7+ has pathlib built-in, but this ensures compatibility)
+pathlib2>=2.3.0; python_version<"3.4"

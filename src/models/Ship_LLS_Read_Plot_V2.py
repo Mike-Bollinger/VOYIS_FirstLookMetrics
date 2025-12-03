@@ -9,7 +9,8 @@ from scipy.stats import gaussian_kde
 import glob
 from scipy.interpolate import interp1d
 import matplotlib.dates as mdates
-from models import read_phinsdata as phins
+import traceback
+import read_phinsdata as phins
 
     
 def FindSidelobe(Data, Raduis=3.5, MinIntensity=90):
@@ -117,41 +118,92 @@ def process_xyz_file(file_path, file_number, radius, min_intensity_threshold, ba
         if log_callback:
             log_callback(message)
 
-    data = pd.read_csv(file_path, delimiter=',', dtype=float).to_numpy()
-    # try:
-    #     data = pd.read_csv(file_path, delimiter=',', dtype=float).to_numpy()
-    # except ValueError:
-    #     df = pd.read_csv(file_path, delimiter=',', low_memory=False)
-    #     # Convert all columns to numeric, replacing non-numeric with NaN
-    #     df = df.apply(pd.to_numeric, errors='coerce')
-    #     data = df.to_numpy()
-
-    unique_times = np.unique(data[:,0])
-    time_diff = np.diff(unique_times).mean()
-    unique_times_dt = [datetime.datetime.fromtimestamp(t / 1000000, tz=datetime.timezone.utc) 
-                      for t in unique_times]
-    Valid_Data_Mask = np.zeros((data.shape[0], 2), dtype=int)
+    # First, check if file exists and has content
+    if not os.path.exists(file_path):
+        log_message(f"Warning: File does not exist, skipping: {file_path}")
+        return []
     
-    # Get IMU data
-    df_imu_nav = pd.DataFrame()
-    df_imu_nav['Date_Time'] = unique_times_dt
-    df_imu_nav = phins.add_IMU_NAV(df_imu_nav, vehicle_dir)
+    # Check file size
+    file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        log_message(f"Warning: File is empty (0 bytes), skipping: {os.path.basename(file_path)}")
+        return []
+    
+    if file_size < 50:  # Files smaller than 50 bytes are likely invalid
+        log_message(f"Warning: File is too small ({file_size} bytes), skipping: {os.path.basename(file_path)}")
+        return []
 
-    # Process each timestamp
-    rows = []
-    for i in range(len(unique_times)):
-        time_index = np.where(data[:,0] == unique_times[i])[0]
-        row,Valid_Data_Mask = process_timestamp_data(data, time_index, unique_times[i], file_number, 
-                                   file_path, df_imu_nav, i, radius, 
-                                   min_intensity_threshold, bad_point_threshold,Valid_Data_Mask,time_diff)
-        rows.append(row)
+    try:
+        # Try to read the file with error handling
+        data = pd.read_csv(file_path, delimiter=',', dtype=float).to_numpy()
+        
+        # Check if data is actually loaded and has the expected structure
+        if data is None or data.size == 0:
+            log_message(f"Warning: File contains no data, skipping: {os.path.basename(file_path)}")
+            return []
+        
+        # Check if data has the expected number of columns (should be at least 5: time, x, y, z, intensity)
+        if data.shape[1] < 5:
+            log_message(f"Warning: File has insufficient columns ({data.shape[1]} < 5), skipping: {os.path.basename(file_path)}")
+            return []
+        
+        # Check if we have any valid rows
+        if data.shape[0] == 0:
+            log_message(f"Warning: File has no data rows, skipping: {os.path.basename(file_path)}")
+            return []
+            
+    except pd.errors.EmptyDataError:
+        log_message(f"Warning: File is empty or has no columns to parse, skipping: {os.path.basename(file_path)}")
+        return []
+    except pd.errors.ParserError as e:
+        log_message(f"Warning: File parsing error, skipping: {os.path.basename(file_path)} - {str(e)}")
+        return []
+    except Exception as e:
+        log_message(f"Warning: Unexpected error reading file, skipping: {os.path.basename(file_path)} - {str(e)}")
+        return []
 
-    # replace LLS_ with Mask_
-    file_path_Mask = file_path.replace('LLS_', 'Mask_')
-    np.savetxt(file_path_Mask, Valid_Data_Mask, delimiter=',', fmt='%d')
-    print(f"Processed {len(rows)} timestamps from file {file_path}")
+    try:
+        unique_times = np.unique(data[:,0])
+        
+        # Check if we have any valid timestamps
+        if len(unique_times) == 0:
+            log_message(f"Warning: File has no valid timestamps, skipping: {os.path.basename(file_path)}")
+            return []
+        
+        time_diff = np.diff(unique_times).mean() if len(unique_times) > 1 else 0
+        unique_times_dt = [datetime.datetime.fromtimestamp(t / 1000000, tz=datetime.timezone.utc) 
+                          for t in unique_times]
+        Valid_Data_Mask = np.zeros((data.shape[0], 2), dtype=int)
+        
+        # Get IMU data
+        df_imu_nav = pd.DataFrame()
+        df_imu_nav['Date_Time'] = unique_times_dt
+        df_imu_nav = phins.add_IMU_NAV(df_imu_nav, vehicle_dir)
 
-    return rows
+        # Process each timestamp
+        rows = []
+        for i in range(len(unique_times)):
+            time_index = np.where(data[:,0] == unique_times[i])[0]
+            row,Valid_Data_Mask = process_timestamp_data(data, time_index, unique_times[i], file_number, 
+                                       file_path, df_imu_nav, i, radius, 
+                                       min_intensity_threshold, bad_point_threshold,Valid_Data_Mask,time_diff)
+            rows.append(row)
+
+        # Only create mask file if we processed data successfully
+        if len(rows) > 0:
+            # replace LLS_ with Mask_
+            file_path_Mask = file_path.replace('LLS_', 'Mask_')
+            np.savetxt(file_path_Mask, Valid_Data_Mask, delimiter=',', fmt='%d')
+            log_message(f"Processed {len(rows)} timestamps from file {os.path.basename(file_path)}")
+        else:
+            log_message(f"Warning: No data processed from file {os.path.basename(file_path)}")
+
+        return rows
+        
+    except Exception as e:
+        log_message(f"Error processing data from file {os.path.basename(file_path)}: {str(e)}")
+        log_message(f"File will be skipped. Error details: {traceback.format_exc()}")
+        return []
 
 def calc_point_density(data_good, velocity, time_diff):
     """Calculate point density and add it to the data."""
@@ -354,12 +406,27 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     
     log_message("Generating dive profile plot...")
     
+    # Check if dfLS has data before processing
+    if dfLS.empty:
+        log_message("Error: No LLS data available for plotting")
+        return
+    
     dfLS['Distance_Traveled'] = np.sqrt(
         (dfLS['AUV_Easting'].diff())**2 + (dfLS['AUV_Northing'].diff())**2
     ).fillna(0).cumsum()
 
     dfLS = dfLS[(dfLS['AUV_Easting'] != 0) & (dfLS['AUV_Northing'] != 0)]
     df_Full_Dive = df_Full_Dive[(df_Full_Dive['AUV_Easting'] != 0) & (df_Full_Dive['AUV_Northing'] != 0)]
+    
+    # Check if dfLS still has data after filtering
+    if dfLS.empty:
+        log_message("Warning: No valid LLS data remaining after filtering (all Easting/Northing values are 0)")
+        return
+    
+    # Check if df_Full_Dive has data
+    if df_Full_Dive.empty:
+        log_message("Warning: No valid navigation data for plotting")
+        return
     
     df1 = dfLS[dfLS['DepthFlag'] == 1]
     df1 = df1.copy()  
@@ -368,11 +435,27 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     plt.figure(figsize=(8.5, 5.5), facecolor='white')
     plt.plot(df_Full_Dive['Date_Time'], df_Full_Dive['AUV_Depth'], '--', label='Depth of AUV', markersize=0.5, color='gray')
     plt.plot(df_Full_Dive['Date_Time'], df_Full_Dive['AUV_Depth']-df_Full_Dive['AUV_Altitude'], 'k', label='Seafloor')
-    plt.plot(df0['Date_Time'], df0['AUV_Depth'], '.', label='Bad Data Point', markersize=1.5, color='orange')
-    plt.plot(df1['Date_Time'], df1['AUV_Depth'], '.g', label='Sensor Reached Seafloor', markersize=1.5)
+    
+    # Only plot data points if they exist
+    if not df0.empty:
+        plt.plot(df0['Date_Time'], df0['AUV_Depth'], '.', label='Bad Data Point', markersize=1.5, color='orange')
+    if not df1.empty:
+        plt.plot(df1['Date_Time'], df1['AUV_Depth'], '.g', label='Sensor Reached Seafloor', markersize=1.5)
+    
     plt.legend()
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-    plt.xlabel(f'Time on {dfLS["Date_Time"].iloc[0].strftime("%m/%d/%y")}')
+    
+    # Use safe date extraction
+    try:
+        date_str = dfLS["Date_Time"].iloc[0].strftime("%m/%d/%y")
+    except (IndexError, AttributeError):
+        # Fallback to df_Full_Dive if dfLS is empty or invalid
+        try:
+            date_str = df_Full_Dive["Date_Time"].iloc[0].strftime("%m/%d/%y") if not df_Full_Dive.empty else "Unknown Date"
+        except (IndexError, AttributeError):
+            date_str = "Unknown Date"
+    
+    plt.xlabel(f'Time on {date_str}')
     plt.ylabel('Depth (m)')
     plt.grid()
     plt.savefig(os.path.join(plot_dir, "LLS_AUV_Dive_Profile.png"), facecolor='white', bbox_inches='tight')
@@ -380,114 +463,156 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     log_message("Generated dive profile plot")
 
     log_message("Generating depth histogram...")
-    # Histogram of depth values
-    plt.figure(figsize=(8.5, 5.5), facecolor='white')
-    plt.hist(df1['Depth'], bins=150, alpha=0.7, color='blue', density=True)
-    plt.xlabel('Depth (m)')
-    plt.ylabel('Probability Density')
-    # plt.title('Histogram of Good Btm Depth Values')
-    # plt.xlim(0, -150)
-    plt.grid()
-    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Depth_Histogram.png"), facecolor='white', bbox_inches='tight')
-    plt.close()
-    log_message("Generated depth histogram")
+    # Histogram of depth values - only if we have good depth data
+    if not df1.empty and 'Depth' in df1.columns:
+        plt.figure(figsize=(8.5, 5.5), facecolor='white')
+        plt.hist(df1['Depth'], bins=150, alpha=0.7, color='blue', density=True)
+        plt.xlabel('Depth (m)')
+        plt.ylabel('Probability Density')
+        # plt.title('Histogram of Good Btm Depth Values')
+        # plt.xlim(0, -150)
+        plt.grid()
+        plt.savefig(os.path.join(plot_dir, "LLS_AUV_Depth_Histogram.png"), facecolor='white', bbox_inches='tight')
+        plt.close()
+        log_message("Generated depth histogram")
+    else:
+        log_message("Skipping depth histogram - no valid depth data available")
 
     log_message("Generating intensity analysis plots...")
-    # plot histogram and depth to intensity scatter plot
-    fig, axs = plt.subplots(1, 2, figsize=(8.5, 5.5), facecolor='white')
-    axs[0].hist(df1['AverageIntensityAll'], bins=150, range=(0,1500), alpha=0.7, label='Intensity All', color='blue', density=True)
-    axs[0].hist(df1['AverageIntensityBtm'], bins=150, range=(0,1500), alpha=0.7, label='Intensity Btm', color='red', density=True)
-    axs[0].axvline(x=MIN_INTENSITY_THRESHOLD, color='black', linestyle='--', label='Intensity Threshold')
-    axs[0].set_xlabel('Intensity')
-    axs[0].set_ylabel('Probability Density')
-    # axs[0].set_title('Histogram of Intensity Values')
-    axs[0].legend()
-    axs[0].grid()
-    axs[1].set_xlim(0, 1500)
+    # plot histogram and depth to intensity scatter plot - only if we have good data
+    if not df1.empty:
+        fig, axs = plt.subplots(1, 2, figsize=(8.5, 5.5), facecolor='white')
+        axs[0].hist(df1['AverageIntensityAll'], bins=150, range=(0,1500), alpha=0.7, label='Intensity All', color='blue', density=True)
+        axs[0].hist(df1['AverageIntensityBtm'], bins=150, range=(0,1500), alpha=0.7, label='Intensity Btm', color='red', density=True)
+        axs[0].axvline(x=MIN_INTENSITY_THRESHOLD, color='black', linestyle='--', label='Intensity Threshold')
+        axs[0].set_xlabel('Intensity')
+        axs[0].set_ylabel('Probability Density')
+        # axs[0].set_title('Histogram of Intensity Values')
+        axs[0].legend()
+        axs[0].grid()
+        axs[1].set_xlim(0, 1500)
 
-    df1a = df1[df1['Depth_Approach'] == 1]
-    df1b = df1[df1['Depth_Approach'] == 2]
-    axs[1].scatter(df1a['AUV_Altitude'], df1a['AverageIntensityAll'], label='High Intensity Area', color='darkorange', s=1)
-    axs[1].scatter(df1b['AUV_Altitude'], df1b['AverageIntensityAll'], label='Low Intensity Area', color='darkcyan', s=1)
-    axs[1].set_xlabel('Depth (m)')
-    axs[1].set_ylabel('Intensity')
-    # axs[1].set_title('Depth vs Intensity')
-    axs[1].legend()
-    axs[1].grid()
-    axs[1].set_xlim(0, 10)
-    axs[1].set_ylim(0, 1600)
+        df1a = df1[df1['Depth_Approach'] == 1]
+        df1b = df1[df1['Depth_Approach'] == 2]
+        
+        if not df1a.empty:
+            axs[1].scatter(df1a['AUV_Altitude'], df1a['AverageIntensityAll'], label='High Intensity Area', color='darkorange', s=1)
+        if not df1b.empty:
+            axs[1].scatter(df1b['AUV_Altitude'], df1b['AverageIntensityAll'], label='Low Intensity Area', color='darkcyan', s=1)
+        
+        axs[1].set_xlabel('Depth (m)')
+        axs[1].set_ylabel('Intensity')
+        # axs[1].set_title('Depth vs Intensity')
+        axs[1].legend()
+        axs[1].grid()
+        axs[1].set_xlim(0, 10)
+        axs[1].set_ylim(0, 1600)
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(plot_dir, f"LLS_AUV_Depth_Vs_Intensity.png"), facecolor='white', bbox_inches='tight')
-    plt.close()
-    log_message("Generated intensity analysis plots")
+        plt.tight_layout()
+        plt.savefig(os.path.join(plot_dir, f"LLS_AUV_Depth_Vs_Intensity.png"), facecolor='white', bbox_inches='tight')
+        plt.close()
+        log_message("Generated intensity analysis plots")
+    else:
+        log_message("Skipping intensity analysis - no valid LLS data available")
 
     log_message("Generating position maps...")
-    # Position plot
-    plt.figure(figsize=(8.5, 5.5), facecolor='white')
-    plt.scatter(df0['AUV_Easting'], df0['AUV_Northing'], alpha=0.5, label='Bad Data Point', color='orange', s=0.75)
-    plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], alpha=0.5, label='AUV Position', color='green', s=0.75)
-    plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path')
-    plt.xlabel('Easting (m)')
-    plt.ylabel('Northing (m)')
-    # plt.title('AUV Position')
-    plt.legend()
-    plt.grid()
-    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position.png"), facecolor='white', bbox_inches='tight')
-    plt.close()
+    # Position plot - check for valid data first
+    if not dfLS.empty or not df_Full_Dive.empty:
+        plt.figure(figsize=(8.5, 5.5), facecolor='white')
+        
+        if not df0.empty:
+            plt.scatter(df0['AUV_Easting'], df0['AUV_Northing'], alpha=0.5, label='Bad Data Point', color='orange', s=0.75)
+        if not df1.empty:
+            plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], alpha=0.5, label='AUV Position', color='green', s=0.75)
+        if not df_Full_Dive.empty:
+            plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path')
+        
+        plt.xlabel('Easting (m)')
+        plt.ylabel('Northing (m)')
+        # plt.title('AUV Position')
+        plt.legend()
+        plt.grid()
+        plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position.png"), facecolor='white', bbox_inches='tight')
+        plt.close()
 
-    # Scatter plot of AUV position with depth color coding
-    plt.figure(figsize=(8.5, 5.5), facecolor='white')
-    plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
-    scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['Depth'], cmap='viridis', s=10, zorder=2)
-    plt.colorbar(scatter, label='Depth (m)')
-    plt.xlabel('Easting (m)')
-    plt.ylabel('Northing (m)')
-    # plt.title('AUV Position with Depth Color Coding')
-    plt.grid()
-    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Color.png"), facecolor='white', bbox_inches='tight')
-    plt.close()
+        # Scatter plot of AUV position with depth color coding
+        if not df1.empty:
+            plt.figure(figsize=(8.5, 5.5), facecolor='white')
+            if not df_Full_Dive.empty:
+                plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
+            scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['Depth'], cmap='viridis', s=10, zorder=2)
+            plt.colorbar(scatter, label='Depth (m)')
+            plt.xlabel('Easting (m)')
+            plt.ylabel('Northing (m)')
+            # plt.title('AUV Position with Depth Color Coding')
+            plt.grid()
+            plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Color.png"), facecolor='white', bbox_inches='tight')
+            plt.close()
+    else:
+        log_message("Skipping position maps - no valid position data available")
 
     log_message("Generating depth deviation analysis...")
-    # Position with depth deviation color coding
-    dfnan = dfLS.copy()
-    dfnan.loc[dfLS['DepthFlag'] == 0, 'Depth'] = np.nan
-    Avg_Velocity = dfnan['AUV_Velocity'].mean()
-    Smooth_Distance = 5 # meters
-    dt= dfnan['Date_Time'].diff().dt.total_seconds().mean()  # Convert to microseconds
-    smooth_timestep = int(round((Smooth_Distance / Avg_Velocity)/dt )) # Convert to microseconds
-    dfnan['Smoothed_Depth'] = dfnan['Depth'].rolling(window=smooth_timestep, min_periods=smooth_timestep, center=True).mean()
-    dfnan['Deviation_Depth'] = dfnan['Depth'] - dfnan['Smoothed_Depth']
-    # sort by Deviation_Depth
-    dfnan.sort_values(by='Deviation_Depth', inplace=True)
-    dfnan.reset_index(drop=True, inplace=True)
+    # Position with depth deviation color coding - only if we have valid data
+    if not dfLS.empty:
+        dfnan = dfLS.copy()
+        dfnan.loc[dfLS['DepthFlag'] == 0, 'Depth'] = np.nan
+        
+        # Calculate average velocity and smoothing parameters
+        if 'AUV_Velocity' in dfnan.columns and not dfnan['AUV_Velocity'].isna().all():
+            Avg_Velocity = dfnan['AUV_Velocity'].mean()
+        else:
+            Avg_Velocity = 1.0  # Default fallback velocity
+        
+        Smooth_Distance = 5 # meters
+        dt = dfnan['Date_Time'].diff().dt.total_seconds().mean()  
+        
+        if dt > 0 and Avg_Velocity > 0:  # Ensure we have valid time differences and velocity
+            smooth_timestep = int(round((Smooth_Distance / Avg_Velocity)/dt )) 
+            if smooth_timestep > 0:
+                dfnan['Smoothed_Depth'] = dfnan['Depth'].rolling(window=smooth_timestep, min_periods=smooth_timestep, center=True).mean()
+                dfnan['Deviation_Depth'] = dfnan['Depth'] - dfnan['Smoothed_Depth']
+                # sort by Deviation_Depth
+                dfnan.sort_values(by='Deviation_Depth', inplace=True)
+                dfnan.reset_index(drop=True, inplace=True)
 
-    plt.figure(figsize=(8.5, 5.5), facecolor='white')
-    plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
-    scatter = plt.scatter(dfnan['AUV_Easting'], dfnan['AUV_Northing'], c=dfnan['Deviation_Depth'], cmap='coolwarm',
-                          vmin=-3, vmax=3, s=10, zorder=2)
-    plt.colorbar(scatter, label='Depth Deviation (m)')
-    plt.xlabel('Easting (m)')
-    plt.ylabel('Northing (m)')
-    # plt.title('AUV Position with Depth Color Coding')
-    plt.grid()
-    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Deviation_Color.png"), facecolor='white', bbox_inches='tight')
-    plt.close()
+                plt.figure(figsize=(8.5, 5.5), facecolor='white')
+                if not df_Full_Dive.empty:
+                    plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
+                scatter = plt.scatter(dfnan['AUV_Easting'], dfnan['AUV_Northing'], c=dfnan['Deviation_Depth'], cmap='coolwarm',
+                                      vmin=-3, vmax=3, s=10, zorder=2)
+                plt.colorbar(scatter, label='Depth Deviation (m)')
+                plt.xlabel('Easting (m)')
+                plt.ylabel('Northing (m)')
+                # plt.title('AUV Position with Depth Color Coding')
+                plt.grid()
+                plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Deviation_Color.png"), facecolor='white', bbox_inches='tight')
+                plt.close()
+            else:
+                log_message("Skipping depth deviation analysis - invalid smoothing parameters")
+        else:
+            log_message("Skipping depth deviation analysis - invalid time or velocity data")
 
-    # Scatter plot of AUV position with intensity color coding
-    df1.sort_values(by='AverageIntensityBtm', inplace=True)
-    df1.reset_index(drop=True, inplace=True)   
-    plt.figure(figsize=(8.5, 5.5), facecolor='white')
-    plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
-    scatter = plt.scatter(df1['AUV_Easting'], df1['AUV_Northing'], c=df1['AverageIntensityBtm'], cmap='viridis', 
-                          vmin=50, vmax=1500, s=10, zorder=2)
-    plt.colorbar(scatter, label='Intensity')
-    plt.xlabel('Easting (m)')
-    plt.ylabel('Northing (m)')
-    # plt.title('AUV Position with Intensity Color Coding')
-    plt.grid()
-    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Intensity_Color.png"), facecolor='white', bbox_inches='tight')
-    plt.close()
+        # Scatter plot of AUV position with intensity color coding
+        if not df1.empty:
+            df1_copy = df1.copy()  # Work with a copy to avoid modifying original
+            df1_copy.sort_values(by='AverageIntensityBtm', inplace=True)
+            df1_copy.reset_index(drop=True, inplace=True)   
+            plt.figure(figsize=(8.5, 5.5), facecolor='white')
+            if not df_Full_Dive.empty:
+                plt.plot(df_Full_Dive['AUV_Easting'], df_Full_Dive['AUV_Northing'], 'k', linewidth=0.25, label='AUV Path', zorder=1)
+            scatter = plt.scatter(df1_copy['AUV_Easting'], df1_copy['AUV_Northing'], c=df1_copy['AverageIntensityBtm'], cmap='viridis', 
+                                  vmin=50, vmax=1500, s=10, zorder=2)
+            plt.colorbar(scatter, label='Intensity')
+            plt.xlabel('Easting (m)')
+            plt.ylabel('Northing (m)')
+            # plt.title('AUV Position with Intensity Color Coding')
+            plt.grid()
+            plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Intensity_Color.png"), facecolor='white', bbox_inches='tight')
+            plt.close()
+        else:
+            log_message("Skipping intensity color plot - no valid LLS data available")
+    else:
+        log_message("Skipping depth deviation analysis - no LLS data available")
     
     log_message("All summary plots generated successfully")
 
@@ -549,8 +674,39 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     # check for dir and files
     LLS_Check(LLSDir, LLSOutputDir, xyz_files, log_callback)
 
-    # estimate run time
-    total_size, Start_Time = Estiamted_Run_Time(xyz_files, LLSDir, process_speed=4.53, log_callback=log_callback)
+    # Pre-filter files to remove empty ones
+    valid_xyz_files = []
+    skipped_files = 0
+    
+    for file_path in xyz_files:
+        if not os.path.exists(file_path):
+            log_message(f"Warning: File does not exist, skipping: {os.path.basename(file_path)}")
+            skipped_files += 1
+            continue
+            
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            log_message(f"Warning: Empty file detected, skipping: {os.path.basename(file_path)}")
+            skipped_files += 1
+            continue
+        elif file_size < 50:  # Very small files are likely invalid
+            log_message(f"Warning: File too small ({file_size} bytes), skipping: {os.path.basename(file_path)}")
+            skipped_files += 1
+            continue
+            
+        valid_xyz_files.append(file_path)
+    
+    if skipped_files > 0:
+        log_message(f"Skipped {skipped_files} empty or invalid files")
+    
+    if not valid_xyz_files:
+        log_message("Error: No valid .xyz files found after filtering")
+        return False
+    
+    log_message(f"Processing {len(valid_xyz_files)} valid LLS files (skipped {skipped_files})")
+
+    # estimate run time using valid files only
+    total_size, Start_Time = Estiamted_Run_Time(valid_xyz_files, LLSDir, process_speed=4.53, log_callback=log_callback)
 
     dfLS = pd.DataFrame(columns=['FileNumber', 'FileName', 'Date_Time', 'TimeUnix', 'TotalPoints', 'NumLIpts', 'NumSLpts',
                                  'PercentLIPoints', 'AUV_Heading', 'AUV_Pitch', 'AUV_Roll', 'AUV_Depth', 'AUV_Altitude', 'AUV_Easting',
@@ -561,19 +717,37 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
 
     rows_list = []
     file_count = 0
-    log_message(f"Processing {len(xyz_files)} LLS files...")
+    successfully_processed = 0
     
-    for file in xyz_files:
+    for file in valid_xyz_files:
         file_count += 1
-        log_message(f"Processing file {file_count}/{len(xyz_files)}: {os.path.basename(file)}")
+        log_message(f"Processing file {file_count}/{len(valid_xyz_files)}: {os.path.basename(file)}")
+        
         file_rows = process_xyz_file(file, file_count, RADIUS, MIN_INTENSITY_THRESHOLD, 
                                 BAD_POINT_THRESHOLD, VehicleDir, log_callback)
-        rows_list.extend(file_rows)
+        
+        if file_rows and len(file_rows) > 0:
+            rows_list.extend(file_rows)
+            successfully_processed += 1
+        else:
+            log_message(f"File {os.path.basename(file)} produced no data - may be corrupted or invalid")
 
+    if not rows_list:
+        log_message("Error: No data was successfully processed from any files")
+        return False
+    
+    log_message(f"Successfully processed {successfully_processed} out of {len(valid_xyz_files)} files")
+    log_message(f"Total data points collected: {len(rows_list)}")
+
+    log_message(f"Successfully processed {successfully_processed} out of {len(valid_xyz_files)} files")
+    log_message(f"Total data points collected: {len(rows_list)}")
+
+    # Continue with rest of processing...
     dfLS = pd.DataFrame(rows_list)
     dfLS['Date_Time'] = pd.to_datetime(dfLS['Date_Time'])
     dfLS.sort_values(by='Date_Time', inplace=True)
     dfLS.reset_index(drop=True, inplace=True)
+    
     # Save the DataFrame to a CSV file - use gui_output_dir if available
     output_file = os.path.join(output_dir if output_dir else LLSOutputDir, "LLS_Processed_Lls.csv")
     dfLS.to_csv(output_file, index=False)
@@ -634,7 +808,48 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     log_message("Processing navigation surface offset...")
     # Use output_dir for vehicle processing if available
     vehicle_plot_dir = output_dir if output_dir else VehicleOutputDir
-    StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = phins.NAV_surface_offset(VehicleDir, vehicle_plot_dir, pd.to_datetime(time_start_list, utc=True).mean())
+    
+    try:
+        StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = phins.NAV_surface_offset(VehicleDir, vehicle_plot_dir, pd.to_datetime(time_start_list, utc=True).mean())
+        
+        # Check if we got valid datetime values
+        if pd.isna(StartDive) or pd.isna(EndDive):
+            log_message("Warning: Could not determine valid dive start/end times from navigation data")
+            log_message("Using default time range for processing...")
+            
+            # Create a fallback time range based on the image data we have
+            if time_start_list:
+                min_time = pd.to_datetime(time_start_list, utc=True).min()
+                max_time = pd.to_datetime(time_start_list, utc=True).max()
+                # Add some padding
+                StartDive = min_time - pd.Timedelta(hours=1)
+                EndDive = max_time + pd.Timedelta(hours=1)
+                log_message(f"Using fallback time range: {StartDive} to {EndDive}")
+            else:
+                # Ultimate fallback - use current time ± 2 hours
+                now = pd.Timestamp.now(tz='UTC')
+                StartDive = now - pd.Timedelta(hours=2)
+                EndDive = now + pd.Timedelta(hours=2)
+                log_message(f"Using current time fallback: {StartDive} to {EndDive}")
+        
+        log_message(f"Dive time range: {StartDive} to {EndDive}")
+        
+    except Exception as e:
+        log_message(f"Error in navigation surface offset calculation: {str(e)}")
+        # Create fallback time range
+        if time_start_list:
+            min_time = pd.to_datetime(time_start_list, utc=True).min()
+            max_time = pd.to_datetime(time_start_list, utc=True).max()
+            StartDive = min_time - pd.Timedelta(hours=1)
+            EndDive = max_time + pd.Timedelta(hours=1)
+            log_message(f"Using fallback time range based on image data: {StartDive} to {EndDive}")
+        else:
+            now = pd.Timestamp.now(tz='UTC')
+            StartDive = now - pd.Timedelta(hours=2)
+            EndDive = now + pd.Timedelta(hours=2)
+            log_message(f"Using current time fallback: {StartDive} to {EndDive}")
+        GPS_OffsetG = 0
+        GPS_OffsetP = 0
        
     df_Full_Dive = pd.DataFrame()
     df_Full_Dive['Date_Time'] = pd.date_range(start=StartDive, end=EndDive, freq='1s')
