@@ -291,15 +291,17 @@ class ProcessingStages:
         model_filename = f"visibility_model_{timestamp}.h5"
         model_save_path = os.path.join(models_dir, model_filename)
         
-        saved_path = self.visibility_analyzer.save_model(model_save_path)
-        if saved_path:
-            self.log_message(f"Trained model saved to: {saved_path}")
-            
-            output_model_path = os.path.join(output_folder, "visibility_model.h5")
-            self.visibility_analyzer.save_model(output_model_path)
-            self.log_message(f"Model copy saved to output folder: {output_model_path}")
+        # Model is automatically saved during training to DEFAULT_MODELS_DIR
+        # Copy it to the output folder as well
+        if self.visibility_analyzer.model:
+            try:
+                output_model_path = os.path.join(output_folder, "visibility_model.h5")
+                self.visibility_analyzer.model.save(output_model_path)
+                self.log_message(f"Model copy saved to output folder: {output_model_path}")
+            except Exception as e:
+                self.log_message(f"Warning: Could not save model to output folder: {e}")
         else:
-            self.log_message("Warning: Could not save trained model")
+            self.log_message("Warning: No trained model available to save")
 
     def process_highlight_selection(self, input_folder, output_folder):
         """Process highlight image selection"""

@@ -370,7 +370,6 @@ class Metrics:
             size_bytes /= 1024
 
     @staticmethod
-    @staticmethod
     def normalize_heading(heading_degrees: float) -> float:
         """
         Normalize heading to 0-360 degree range

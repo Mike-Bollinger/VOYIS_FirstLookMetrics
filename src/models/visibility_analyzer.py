@@ -461,7 +461,26 @@ class VisibilityAnalyzer:
             loss, accuracy = model.evaluate(X_val, y_val, verbose=0)
             
             if progress_callback:
-                progress_callback(95, f"Training complete. Validation accuracy: {accuracy*100:.1f}%")
+                progress_callback(92, f"Training complete. Validation accuracy: {accuracy*100:.1f}%")
+            
+            # Save the trained model
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                model_filename = f"visibility_model_{timestamp}.h5"
+                
+                # Save to default models directory
+                model_save_path = os.path.join(DEFAULT_MODELS_DIR, model_filename)
+                os.makedirs(DEFAULT_MODELS_DIR, exist_ok=True)
+                
+                model.save(model_save_path)
+                self.log_message(f"Model saved to: {model_save_path}")
+                
+                if progress_callback:
+                    progress_callback(95, f"Model saved to: {model_save_path}")
+                    
+            except Exception as e:
+                self.log_message(f"Warning: Could not save model: {e}")
             
             return True
             
@@ -585,11 +604,12 @@ class VisibilityAnalyzer:
                 for img_path in batch_paths:
                     try:
                         # Use tf.keras.preprocessing.image.load_img for compatibility
-                        img = self.tf.keras.preprocessing.image.load_img(img_path, target_size=(224, 224))
-                        img_array = self.tf.keras.preprocessing.image.img_to_array(img)
-                        img_normalized = img_array.astype('float32') / 255.0
+                        img = self._load_img(img_path, target_size=(224, 224))
+                        img_array = self._img_to_array(img)
+                        # CRITICAL: Use same preprocessing as training (VGG16 preprocessing)
+                        img_preprocessed = self._preprocess_input(img_array)
                         
-                        batch_images.append(img_normalized)
+                        batch_images.append(img_preprocessed)
                         batch_info.append({
                             'path': img_path,
                             'filename': os.path.basename(img_path)
@@ -618,6 +638,7 @@ class VisibilityAnalyzer:
                             
                             result = {
                                 'image': info['filename'],
+                                'image_path': info['path'],
                                 'visibility': visibility,
                                 'confidence': confidence
                             }
@@ -749,58 +770,75 @@ class VisibilityAnalyzer:
                 ax_thumb = self._plt.subplot2grid((5, 6), (i, 3), colspan=3)
                 thumbnail_axes.append(ax_thumb)
             
-            # Find example images for each category
+            # Find example images for each category (use highest confidence)
             for idx, category in enumerate(category_order):
                 if idx >= len(thumbnail_axes):
                     break
                     
                 ax = thumbnail_axes[idx]
                 
-                # Find an image from this category
+                # Find images from this category, sorted by confidence (highest first)
                 category_images = df[df['visibility'] == category]
                 
                 if len(category_images) > 0:
-                    # Get the first image path
-                    sample_image_name = category_images.iloc[0]['image']
+                    # Sort by confidence and get the highest confidence image
+                    category_images_sorted = category_images.sort_values('confidence', ascending=False)
+                    best_image = category_images_sorted.iloc[0]
                     
-                    # Try to find the full path
+                    # Try to get the image path from the CSV first
                     image_path = None
+                    if 'image_path' in best_image and self._pd.notna(best_image['image_path']):
+                        image_path = best_image['image_path']
+                        self.log_message(f"Using path from CSV for {category}: {image_path}")
+                    else:
+                        # Fallback: search for the image
+                        sample_image_name = best_image['image']
+                        self.log_message(f"Searching for {category} thumbnail: {sample_image_name}")
+                        
+                        # Search in common locations relative to output folder
+                        parent_dir = os.path.dirname(output_folder)
+                        possible_dirs = [
+                            parent_dir,  # Often image_raw is sibling to products
+                            os.path.join(parent_dir, 'image_raw'),
+                            os.path.join(parent_dir, 'images'),
+                            os.path.join(parent_dir, 'Image_raw'),
+                            os.path.join(parent_dir, 'test_images_raw'),
+                            os.path.join(parent_dir, 'test_images_auv_proc'),
+                            output_folder
+                        ]
+                        
+                        for search_dir in possible_dirs:
+                            if os.path.exists(search_dir):
+                                test_path = os.path.join(search_dir, sample_image_name)
+                                if os.path.exists(test_path):
+                                    image_path = test_path
+                                    self.log_message(f"Found thumbnail in: {search_dir}")
+                                    break
                     
-                    # Search in common locations
-                    possible_dirs = [
-                        output_folder,
-                        os.path.dirname(output_folder),
-                        os.path.join(os.path.dirname(output_folder), 'images'),
-                        os.path.join(os.path.dirname(output_folder), 'test_images_raw'),
-                        os.path.join(os.path.dirname(output_folder), 'test_images_auv_proc')
-                    ]
-                    
-                    for search_dir in possible_dirs:
-                        test_path = os.path.join(search_dir, sample_image_name)
-                        if os.path.exists(test_path):
-                            image_path = test_path
-                            break
-                    
+                    # Try to load and display the thumbnail
                     if image_path and os.path.exists(image_path):
-                        # Load and display thumbnail
                         try:
                             img = self._cv2.imread(image_path)
                             if img is not None:
                                 img_rgb = self._cv2.cvtColor(img, self._cv2.COLOR_BGR2RGB)
                                 ax.imshow(img_rgb)
-                                ax.set_title(f"{category.title()} Example", 
+                                confidence_pct = best_image['confidence'] * 100
+                                ax.set_title(f"{category.title()} ({confidence_pct:.1f}%)", 
                                            fontsize=10, fontweight='bold',
                                            color=color_map.get(category, '#000000'))
+                                self.log_message(f"✓ Loaded thumbnail for {category}")
                             else:
-                                ax.text(0.5, 0.5, f'{category.title()}\nNo Image', 
+                                ax.text(0.5, 0.5, f'{category.title()}\nLoad Failed', 
                                        ha='center', va='center', fontsize=10)
+                                self.log_message(f"Failed to decode image for {category}: {image_path}")
                         except Exception as e:
                             self.log_message(f"Error loading thumbnail for {category}: {e}")
                             ax.text(0.5, 0.5, f'{category.title()}\nImage Error', 
                                    ha='center', va='center', fontsize=10)
                     else:
-                        ax.text(0.5, 0.5, f'{category.title()}\nNo Image Found', 
+                        ax.text(0.5, 0.5, f'{category.title()}\nNot Found', 
                                ha='center', va='center', fontsize=10)
+                        self.log_message(f"Could not locate thumbnail for {category}")
                 else:
                     ax.text(0.5, 0.5, f'{category.title()}\nNo Data', 
                            ha='center', va='center', fontsize=10, color='gray')
