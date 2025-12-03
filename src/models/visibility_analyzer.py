@@ -34,8 +34,8 @@ class VisibilityAnalyzer:
         self.tf_available = False
         self.log_callback = log_callback
         
-        # Initialize categories
-        self.categories = ['zero_visibility', 'low_visibility', 'good_visibility', 'great_visibility']
+        # Initialize categories - now 5 categories instead of 4
+        self.categories = ['zero', 'poor', 'fair', 'good', 'excellent']
         
         # Initialize statistics containers
         self.visibility_stats = {}
@@ -190,6 +190,54 @@ class VisibilityAnalyzer:
             self.log_message(f"Error loading model: {e}")
             self.log_message(traceback.format_exc())
             return None
+    
+    def verify_training_data(self, path: str, progress_callback: Optional[Callable] = None) -> bool:
+        """
+        Verify that the training data directory has the correct structure.
+        
+        Args:
+            path: Path to the training data directory
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            Boolean indicating if the structure is valid
+        """
+        try:
+            if not os.path.isdir(path):
+                self.log_message(f"Path is not a directory: {path}")
+                return False
+            
+            # Get subdirectories
+            subdirs = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
+            
+            if not subdirs:
+                self.log_message("No subdirectories found in training data path")
+                return False
+            
+            # Update categories based on what's found
+            self.categories = sorted(subdirs)
+            self.log_message(f"Found training categories: {self.categories}")
+            
+            # Verify each category has images
+            for category in self.categories:
+                category_path = os.path.join(path, category)
+                image_files = [f for f in os.listdir(category_path) 
+                             if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
+                
+                if not image_files:
+                    self.log_message(f"Warning: No images found in category '{category}'")
+                    return False
+                
+                self.log_message(f"Category '{category}': {len(image_files)} images")
+            
+            if progress_callback:
+                progress_callback(15, f"Training data verified: {len(self.categories)} categories found")
+            
+            return True
+            
+        except Exception as e:
+            self.log_message(f"Error verifying training data: {e}")
+            return False
     
     def load_or_train_model(self, path: str, progress_callback: Optional[Callable] = None) -> bool:
         """
@@ -642,38 +690,134 @@ class VisibilityAnalyzer:
             return False, {}
 
     def create_visibility_chart(self, csv_path: str, output_folder: str) -> Optional[str]:
-        """Create a basic visibility distribution chart"""
+        """Create an enhanced colorful visibility distribution chart with example thumbnails"""
         try:
-            if not self._plt:
+            if not self._plt or not self._cv2:
+                self.log_message("Required libraries not available for chart creation")
                 return None
+            
+            # Set matplotlib to use non-interactive backend to avoid threading issues
+            import matplotlib
+            matplotlib.use('Agg')
                 
             df = self._pd.read_csv(csv_path)
             
-            # Create chart
+            # Define color scheme - vibrant colors for each category
+            color_map = {
+                'zero': '#8B0000',        # Dark red
+                'poor': '#FF4500',        # Orange red
+                'fair': '#FFD700',        # Gold
+                'good': '#32CD32',        # Lime green
+                'excellent': '#006400'    # Dark green
+            }
+            
+            # Get visibility counts in order
+            category_order = ['zero', 'poor', 'fair', 'good', 'excellent']
             visibility_counts = df['visibility'].value_counts()
             
-            fig, ax = self._plt.subplots(figsize=(10, 6))
-            bars = ax.bar(visibility_counts.index, visibility_counts.values)
+            # Create figure with subplots for thumbnails
+            fig = self._plt.figure(figsize=(16, 8))
+            
+            # Main bar chart (left side)
+            ax_bar = self._plt.subplot2grid((1, 6), (0, 0), colspan=3)
+            
+            # Prepare data for bar chart
+            categories_present = [cat for cat in category_order if cat in visibility_counts.index]
+            counts = [visibility_counts.get(cat, 0) for cat in categories_present]
+            colors = [color_map.get(cat, '#808080') for cat in categories_present]
+            
+            bars = ax_bar.bar(range(len(categories_present)), counts, color=colors, edgecolor='black', linewidth=1.5)
             
             # Add value labels on bars
-            for bar in bars:
+            for i, (bar, count) in enumerate(zip(bars, counts)):
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height,
-                       f'{int(height)}',
-                       ha='center', va='bottom')
+                ax_bar.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{int(count)}',
+                           ha='center', va='bottom', fontsize=12, fontweight='bold')
             
-            ax.set_title('Visibility Distribution')
-            ax.set_xlabel('Visibility Category')
-            ax.set_ylabel('Number of Images')
+            ax_bar.set_title('Visibility Distribution Analysis', fontsize=16, fontweight='bold', pad=20)
+            ax_bar.set_xlabel('Visibility Category', fontsize=12, fontweight='bold')
+            ax_bar.set_ylabel('Number of Images', fontsize=12, fontweight='bold')
+            ax_bar.set_xticks(range(len(categories_present)))
+            ax_bar.set_xticklabels([cat.title() for cat in categories_present], fontsize=11)
+            ax_bar.grid(axis='y', alpha=0.3, linestyle='--')
+            ax_bar.set_axisbelow(True)
             
+            # Add example thumbnails (right side)
+            thumbnail_axes = []
+            for i in range(5):
+                ax_thumb = self._plt.subplot2grid((5, 6), (i, 3), colspan=3)
+                thumbnail_axes.append(ax_thumb)
+            
+            # Find example images for each category
+            for idx, category in enumerate(category_order):
+                if idx >= len(thumbnail_axes):
+                    break
+                    
+                ax = thumbnail_axes[idx]
+                
+                # Find an image from this category
+                category_images = df[df['visibility'] == category]
+                
+                if len(category_images) > 0:
+                    # Get the first image path
+                    sample_image_name = category_images.iloc[0]['image']
+                    
+                    # Try to find the full path
+                    image_path = None
+                    
+                    # Search in common locations
+                    possible_dirs = [
+                        output_folder,
+                        os.path.dirname(output_folder),
+                        os.path.join(os.path.dirname(output_folder), 'images'),
+                        os.path.join(os.path.dirname(output_folder), 'test_images_raw'),
+                        os.path.join(os.path.dirname(output_folder), 'test_images_auv_proc')
+                    ]
+                    
+                    for search_dir in possible_dirs:
+                        test_path = os.path.join(search_dir, sample_image_name)
+                        if os.path.exists(test_path):
+                            image_path = test_path
+                            break
+                    
+                    if image_path and os.path.exists(image_path):
+                        # Load and display thumbnail
+                        try:
+                            img = self._cv2.imread(image_path)
+                            if img is not None:
+                                img_rgb = self._cv2.cvtColor(img, self._cv2.COLOR_BGR2RGB)
+                                ax.imshow(img_rgb)
+                                ax.set_title(f"{category.title()} Example", 
+                                           fontsize=10, fontweight='bold',
+                                           color=color_map.get(category, '#000000'))
+                            else:
+                                ax.text(0.5, 0.5, f'{category.title()}\nNo Image', 
+                                       ha='center', va='center', fontsize=10)
+                        except Exception as e:
+                            self.log_message(f"Error loading thumbnail for {category}: {e}")
+                            ax.text(0.5, 0.5, f'{category.title()}\nImage Error', 
+                                   ha='center', va='center', fontsize=10)
+                    else:
+                        ax.text(0.5, 0.5, f'{category.title()}\nNo Image Found', 
+                               ha='center', va='center', fontsize=10)
+                else:
+                    ax.text(0.5, 0.5, f'{category.title()}\nNo Data', 
+                           ha='center', va='center', fontsize=10, color='gray')
+                
+                ax.axis('off')
+            
+            self._plt.tight_layout()
             chart_path = os.path.join(output_folder, "Image_Visibility_Analysis.png")
-            self._plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+            self._plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
             self._plt.close()
             
+            self.log_message(f"Enhanced visibility chart created: {chart_path}")
             return chart_path
             
         except Exception as e:
             self.log_message(f"Error creating visibility chart: {e}")
+            self.log_message(traceback.format_exc())
             return None
         
     def export_visibility_metrics(self, output_path: str, analysis_results: Dict) -> None:
@@ -714,8 +858,8 @@ class VisibilityAnalyzer:
                     f.write(f"\nVISIBILITY QUALITY ASSESSMENT\n")
                     f.write("-" * 32 + "\n")
                     
-                    good_count = by_category.get('good_visibility', 0) + by_category.get('great_visibility', 0)
-                    poor_count = by_category.get('zero_visibility', 0) + by_category.get('low_visibility', 0)
+                    good_count = by_category.get('good', 0) + by_category.get('excellent', 0)
+                    poor_count = by_category.get('zero', 0) + by_category.get('poor', 0)
                     good_percentage = (good_count / total_analyzed * 100) if total_analyzed > 0 else 0
                     poor_percentage = (poor_count / total_analyzed * 100) if total_analyzed > 0 else 0
                     
