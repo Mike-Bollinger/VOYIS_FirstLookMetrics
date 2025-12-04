@@ -421,6 +421,31 @@ class ProcessingController:
             if self.check_stop_flag():
                 return
             
+            # Convert Image_Metrics.csv to Shapefile (if it exists)
+            # This happens regardless of which boxes are checked, as long as any imagery processing occurred
+            if imagery_selected:
+                self.log_message("\nFINAL STEP: Converting Image_Metrics.csv to ESRI Shapefile...")
+                try:
+                    from src.utils.file_utils import convert_csv_to_shapefile
+                    
+                    csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+                    if os.path.exists(csv_path):
+                        shapefile_path = convert_csv_to_shapefile(
+                            csv_path=csv_path,
+                            log_callback=self.log_message
+                        )
+                        
+                        if shapefile_path:
+                            self.log_message("✓ Shapefile export completed")
+                        else:
+                            self.log_message("⚠ Shapefile export skipped (no coordinates or geopandas unavailable)")
+                    else:
+                        self.log_message("⚠ Image_Metrics.csv not found - shapefile export skipped")
+                        
+                except Exception as shapefile_error:
+                    self.log_message(f"⚠ Error during shapefile export: {shapefile_error}")
+                    self.log_message("   Processing completed successfully, but shapefile was not created")
+            
             # Final overall summary
             total_processes = (1 if nav_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
             self.log_message(f"\n{'='*60}")

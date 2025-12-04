@@ -226,6 +226,7 @@ The application generates comprehensive outputs organized by processing module:
 
 ### Imagery Analysis Module Outputs
 - `Image_Metrics.csv`: **Master CSV file** containing integrated metrics from all of the Imaging Modules
+- `Image_Metrics.shp`: **ESRI Shapefile** version of the master CSV with all metrics (automatically generated)
 - `Image_Locations_Map.png`: Location map colored by altitude
 - `Image_Altitude_Histogram.png`: Altitude distribution visualization
 - `Image_Footprints_Map.png`: Coverage map with image footprints

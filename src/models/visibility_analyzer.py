@@ -184,6 +184,20 @@ class VisibilityAnalyzer:
                 
             self.log_message(f"Loading model from: {model_path}")
             model = self.tf.keras.models.load_model(model_path)
+            
+            # Verify model output matches expected categories
+            output_shape = model.output_shape[-1]
+            expected_categories = len(self.categories)
+            
+            if output_shape != expected_categories:
+                self.log_message(f"⚠️ WARNING: Model mismatch detected!")
+                self.log_message(f"   Model has {output_shape} output classes")
+                self.log_message(f"   Expected {expected_categories} categories: {self.categories}")
+                self.log_message(f"   This model may have been trained on different categories.")
+                self.log_message(f"   RECOMMENDATION: Retrain the model with the current training data.")
+            else:
+                self.log_message(f"✓ Model output matches {expected_categories} categories")
+            
             self.log_message("Model loaded successfully")
             return model
         except Exception as e:

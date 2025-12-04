@@ -322,14 +322,18 @@ class HighlightSelector:
                                 metrics_df.at[i, 'visibility_category'] = vis_data['category']
                                 metrics_df.at[i, 'visibility_confidence'] = vis_data['confidence']
                                 
-                                # Calculate visibility score
+                                # Calculate visibility score (5-category system)
                                 vis_category_score = 0.0
-                                if vis_data['category'] == 'great_visibility':
+                                if vis_data['category'] == 'excellent':
                                     vis_category_score = 1.0
-                                elif vis_data['category'] == 'good_visibility':
+                                elif vis_data['category'] == 'good':
                                     vis_category_score = 0.75
-                                elif vis_data['category'] == 'low_visibility':
-                                    vis_category_score = 0.3
+                                elif vis_data['category'] == 'fair':
+                                    vis_category_score = 0.5
+                                elif vis_data['category'] == 'poor':
+                                    vis_category_score = 0.25
+                                elif vis_data['category'] == 'zero':
+                                    vis_category_score = 0.0
                                 
                                 metrics_df.at[i, 'visibility_score'] = vis_category_score * vis_data['confidence']
             
@@ -366,14 +370,18 @@ class HighlightSelector:
                                 metrics['visibility_category'] = vis_data['category']
                                 metrics['visibility_confidence'] = vis_data['confidence']
                                 
-                                # Calculate visibility score
+                                # Calculate visibility score (5-category system)
                                 vis_category_score = 0.0
-                                if vis_data['category'] == 'great_visibility':
+                                if vis_data['category'] == 'excellent':
                                     vis_category_score = 1.0
-                                elif vis_data['category'] == 'good_visibility':
+                                elif vis_data['category'] == 'good':
                                     vis_category_score = 0.75
-                                elif vis_data['category'] == 'low_visibility':
-                                    vis_category_score = 0.3
+                                elif vis_data['category'] == 'fair':
+                                    vis_category_score = 0.5
+                                elif vis_data['category'] == 'poor':
+                                    vis_category_score = 0.25
+                                elif vis_data['category'] == 'zero':
+                                    vis_category_score = 0.0
                                 
                                 metrics['visibility_score'] = vis_category_score * vis_data['confidence']
                             else:
@@ -442,14 +450,14 @@ class HighlightSelector:
             log_message(f"Combined scores calculated. Range: {min(combined_scores):.3f} to {max(combined_scores):.3f}, "
                        f"mean={metrics_df['combined_score'].mean():.3f}")
             
-            # Filter out zero_visibility images if we have visibility data
+            # Filter out zero visibility images if we have visibility data
             if has_visibility_data:
                 log_message("Filtering out zero visibility images...", progress=88)
                 zero_vis_count = 0
                 
-                # Create a filter to exclude zero_visibility images
+                # Create a filter to exclude zero visibility images (new category name)
                 if 'visibility_category' in metrics_df.columns:
-                    zero_vis_mask = metrics_df['visibility_category'] == 'zero_visibility'
+                    zero_vis_mask = metrics_df['visibility_category'] == 'zero'
                     zero_vis_count = zero_vis_mask.sum()
                     
                     if zero_vis_count > 0:
@@ -828,14 +836,18 @@ class HighlightSelector:
                     metrics['visibility_category'] = vis_data['category']
                     metrics['visibility_confidence'] = vis_data['confidence']
                     
-                    # Calculate visibility score
+                    # Calculate visibility score (5-category system)
                     vis_category_score = 0.0
-                    if vis_data['category'] == 'great_visibility':
+                    if vis_data['category'] == 'excellent':
                         vis_category_score = 1.0
-                    elif vis_data['category'] == 'good_visibility':
+                    elif vis_data['category'] == 'good':
                         vis_category_score = 0.75
-                    elif vis_data['category'] == 'low_visibility':
-                        vis_category_score = 0.3
+                    elif vis_data['category'] == 'fair':
+                        vis_category_score = 0.5
+                    elif vis_data['category'] == 'poor':
+                        vis_category_score = 0.25
+                    elif vis_data['category'] == 'zero':
+                        vis_category_score = 0.0
                     
                     metrics['visibility_score'] = vis_category_score * vis_data['confidence']
                 else:
@@ -1029,15 +1041,17 @@ class HighlightSelector:
                     visibility = row['visibility_category']
                     confidence = row['visibility_confidence']
                     
-                    # Determine category CSS class
-                    if visibility == "zero_visibility":
+                    # Determine category CSS class (5-category system)
+                    if visibility == "zero":
                         category_class = "zero"
-                    elif visibility == "low_visibility":
-                        category_class = "low"
-                    elif visibility == "good_visibility":
+                    elif visibility == "poor":
+                        category_class = "poor"
+                    elif visibility == "fair":
+                        category_class = "fair"
+                    elif visibility == "good":
                         category_class = "good"
-                    elif visibility == "great_visibility":
-                        category_class = "great"
+                    elif visibility == "excellent":
+                        category_class = "excellent"
                     
                     visibility_html = f"""
                     <div class="metric category {category_class}">Visibility Category: {visibility}</div>
