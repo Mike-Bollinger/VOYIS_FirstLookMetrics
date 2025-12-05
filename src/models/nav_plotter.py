@@ -900,12 +900,23 @@ class NavPlotter:
             print(f"Error loading navigation data: {e}")
             return None
     
-    def create_nav_plots(self, df, output_dir, dive_name, log_callback=None):
-        """Create comprehensive navigation plots in 5x6 grid layout with enhanced features"""
+    def create_nav_plots(self, df, output_dir, dive_name, log_callback=None, file_prefix="Nav_"):
+        """Create comprehensive navigation plots in 5x6 grid layout with enhanced features
+        
+        Args:
+            df: DataFrame with navigation data
+            output_dir: Output directory for plots
+            dive_name: Name of the dive
+            log_callback: Optional logging callback
+            file_prefix: Prefix for output files (e.g., "DIVE015_nav_")
+        """
         def log_message(message):
             print(message)
             if log_callback:
                 log_callback(message)
+        
+        # Store file_prefix for use in plotting methods
+        self.file_prefix = file_prefix
         
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
@@ -1183,7 +1194,7 @@ class NavPlotter:
         # Use subplots_adjust for the 5x6 grid layout
         plt.subplots_adjust(left=0.06, bottom=0.10, right=0.95, top=0.94, 
                            wspace=0.30, hspace=0.55)
-        plot_path = os.path.join(output_dir, "Nav_Motion_Analysis.png")
+        plot_path = os.path.join(output_dir, f"{self.file_prefix}Motion_Analysis.png")
         plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
         plt.close()
         log_message(f"Saved comprehensive motion analysis plot: {plot_path}")
@@ -1358,7 +1369,7 @@ class NavPlotter:
             plt.subplots_adjust(top=0.94)
         
         # Save plot
-        plot_path = os.path.join(output_dir, "Nav_Comprehensive_Timeseries.png")
+        plot_path = os.path.join(output_dir, f"{self.file_prefix}Comprehensive_Timeseries.png")
         plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
         plt.close()
         log_message(f"Saved comprehensive time series plot: {plot_path}")
@@ -1432,7 +1443,7 @@ class NavPlotter:
                     fontsize=10, family='monospace')
         
         # Save plot
-        plot_path = os.path.join(output_dir, "Nav_Overlaid_Timeseries.png")
+        plot_path = os.path.join(output_dir, f"{self.file_prefix}Overlaid_Timeseries.png")
         plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
         plt.close()
         log_message(f"Saved overlaid time series plot: {plot_path}")
@@ -1460,13 +1471,13 @@ class NavPlotter:
                 
                 # Use standardized naming
                 if motion == 'heave':
-                    plot_path = os.path.join(output_dir, "Nav_Heave_Map.png")
+                    plot_path = os.path.join(output_dir, f"{self.file_prefix}Heave_Map.png")
                 elif motion == 'pitch':
-                    plot_path = os.path.join(output_dir, "Nav_Pitch_Map.png")
+                    plot_path = os.path.join(output_dir, f"{self.file_prefix}Pitch_Map.png")
                 elif motion == 'roll':
-                    plot_path = os.path.join(output_dir, "Nav_Roll_Map.png")
+                    plot_path = os.path.join(output_dir, f"{self.file_prefix}Roll_Map.png")
                 else:
-                    plot_path = os.path.join(output_dir, f"Nav_{motion.title()}_Map.png")
+                    plot_path = os.path.join(output_dir, f"{self.file_prefix}{motion.title()}_Map.png")
                 
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                 plt.close()
@@ -1553,13 +1564,13 @@ class NavPlotter:
             
             # Use standardized naming
             if motion == 'heave':
-                plot_path = os.path.join(output_dir, "Nav_Heave_Timeseries.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Heave_Timeseries.png")
             elif motion == 'pitch':
-                plot_path = os.path.join(output_dir, "Nav_Pitch_Timeseries.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Pitch_Timeseries.png")
             elif motion == 'roll':
-                plot_path = os.path.join(output_dir, "Nav_Roll_Timeseries.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Roll_Timeseries.png")
             else:
-                plot_path = os.path.join(output_dir, f"Nav_{motion.title()}_Timeseries.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}{motion.title()}_Timeseries.png")
             
             plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
             plt.close()
@@ -1592,13 +1603,13 @@ class NavPlotter:
             
             # Save histogram plot
             if motion == 'heave':
-                plot_path = os.path.join(output_dir, "Nav_Heave_Histogram.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Heave_Histogram.png")
             elif motion == 'pitch':
-                plot_path = os.path.join(output_dir, "Nav_Pitch_Histogram.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Pitch_Histogram.png")
             elif motion == 'roll':
-                plot_path = os.path.join(output_dir, "Nav_Roll_Histogram.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Roll_Histogram.png")
             else:
-                plot_path = os.path.join(output_dir, f"Nav_{motion.title()}_Histogram.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}{motion.title()}_Histogram.png")
             
             plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
             plt.close()
@@ -1626,7 +1637,7 @@ class NavPlotter:
             plt.grid(True, alpha=0.3)
             plt.gca().invert_yaxis()  # Invert y-axis so depth increases downward
             
-            plot_path = os.path.join(output_dir, "Nav_Depth_Profile.png")
+            plot_path = os.path.join(output_dir, f"{self.file_prefix}Depth_Profile.png")
             plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
             plt.close()
             log_message(f"Saved depth profile: {plot_path}")
@@ -1651,7 +1662,7 @@ class NavPlotter:
             # Format coordinate axes to avoid scientific notation
             self._format_coordinate_axis(plt.gca(), 'both')
             
-            plot_path = os.path.join(output_dir, "Nav_Depth_Map.png")
+            plot_path = os.path.join(output_dir, f"{self.file_prefix}Depth_Map.png")
             plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
             plt.close()
             log_message(f"Saved vehicle depth map: {plot_path}")
@@ -1681,7 +1692,7 @@ class NavPlotter:
                 # Format coordinate axes to avoid scientific notation
                 self._format_coordinate_axis(plt.gca(), 'both')
                 
-                plot_path = os.path.join(output_dir, "Nav_Bathymetry_Map.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Bathymetry_Map.png")
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                 plt.close()
                 log_message(f"Saved vehicle bathymetry map: {plot_path}")
@@ -1719,7 +1730,7 @@ class NavPlotter:
                     # Format coordinate axes to avoid scientific notation
                     self._format_coordinate_axis(plt.gca(), 'both')
                     
-                    plot_path = os.path.join(output_dir, "Nav_Crab_Index_Map.png")
+                    plot_path = os.path.join(output_dir, f"{self.file_prefix}Crab_Index_Map.png")
                     plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                     plt.close()
                     log_message(f"Saved crab index map: {plot_path}")
@@ -1768,7 +1779,7 @@ class NavPlotter:
                         bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'),
                         fontsize=10, family='monospace')
                 
-                plot_path = os.path.join(output_dir, "Nav_Crab_Index_Timeseries.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Crab_Index_Timeseries.png")
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                 plt.close()
                 log_message(f"Saved crab index time series: {plot_path}")
@@ -1815,7 +1826,7 @@ class NavPlotter:
                         bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'),
                         fontsize=10, family='monospace')
                 
-                plot_path = os.path.join(output_dir, "Nav_Crab_Index_Histogram.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Crab_Index_Histogram.png")
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                 plt.close()
                 log_message(f"Saved crab index histogram: {plot_path}")
@@ -1849,7 +1860,7 @@ class NavPlotter:
                 if 'datetime' in df.columns:
                     self._format_datetime_axis(plt.gca(), x_data, df)
                 
-                plot_path = os.path.join(output_dir, "Nav_Heading_vs_COG.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Heading_vs_COG.png")
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                 plt.close()
                 log_message(f"Saved heading vs COG comparison: {plot_path}")
@@ -1932,7 +1943,7 @@ class NavPlotter:
                 
                 plt.tight_layout()
                 
-                plot_path = os.path.join(output_dir, "Nav_Crab_Index_Analysis.png")
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Crab_Index_Analysis.png")
                 plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
                 plt.close()
                 log_message(f"Saved enhanced crab index analysis: {plot_path}")
@@ -2046,7 +2057,7 @@ class NavPlotter:
         plt.gca().invert_yaxis()
         
         # Save the plot
-        plot_path = os.path.join(output_dir, "Nav_Depth_vs_Bathymetry_Timeseries.png")
+        plot_path = os.path.join(output_dir, f"{self.file_prefix}Depth_vs_Bathymetry_Timeseries.png")
         plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
         plt.close()
         log_message(f"Saved depth vs bathymetry time series: {plot_path}")
@@ -2398,7 +2409,7 @@ class NavPlotter:
                 log_message(f"  Severe crabbing (>10°): {severe_crab} points ({severe_crab/len(crab_data)*100:.1f}%)")
                 log_message(f"  Moderate crabbing (5-10°): {moderate_crab} points ({moderate_crab/len(crab_data)*100:.1f}%)")
     
-    def process_navigation_directory(self, nav_directory, output_dir, dive_name="Navigation", log_callback=None):
+    def process_navigation_directory(self, nav_directory, output_dir, dive_name="Navigation", log_callback=None, file_prefix="Nav_"):
         """
         Process a directory containing navigation files and create plots
         
@@ -2406,6 +2417,7 @@ class NavPlotter:
         :param output_dir: Directory to save the plots
         :param dive_name: Name for the dive (used in filenames)
         :param log_callback: Optional callback function for logging messages to GUI (overrides constructor callback)
+        :param file_prefix: Prefix for output filenames (e.g., "DIVE015_nav_")
         """
         # Use provided callback or fall back to stored callback
         active_callback = log_callback or self.log_callback
@@ -2426,8 +2438,8 @@ class NavPlotter:
             
             log_message(f"Successfully merged navigation data: {len(df)} data points")
             
-            # Create comprehensive navigation plots
-            self.create_nav_plots(df, output_dir, dive_name, active_callback)
+            # Create comprehensive navigation plots with file prefix
+            self.create_nav_plots(df, output_dir, dive_name, active_callback, file_prefix)
             
             # Analyze navigation quality
             self.analyze_nav_quality(df, active_callback)
@@ -2441,3 +2453,4 @@ class NavPlotter:
             import traceback
             traceback.print_exc()
             return False  # Indicate failure
+

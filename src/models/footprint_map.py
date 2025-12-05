@@ -542,7 +542,8 @@ class FootprintMap:
     
     def create_footprint_map(self, gps_data: List[Dict], output_path: str, 
                             nav_file_path: str = None,
-                            filename: str = "Image_Footprints_Map.png") -> Optional[str]:
+                            file_prefix: str = "Image_",
+                            filename: str = None) -> Optional[str]:
         """
         Create a map showing image footprints on the seafloor
         
@@ -550,11 +551,16 @@ class FootprintMap:
             gps_data: List of dictionaries with GPS and EXIF data
             output_path: Directory to save the output files
             nav_file_path: Path to vehicle navigation file
+            file_prefix: Dive-specific prefix for output files
             filename: Filename for the generated map
             
         Returns:
             Path to the saved plot file, or None if no data or error
 """
+        # Set default filename using file_prefix if not provided
+        if filename is None:
+            filename = f"{file_prefix}Footprints_Map.png"
+        
         if not gps_data:
             print("No GPS data available")
             return None
@@ -797,11 +803,11 @@ class FootprintMap:
 
         # Export to CSV and shapefile AFTER all overlap metrics are calculated
         print("\nExporting to CSV and shapefile...")
-        self.export_footprints(footprints, output_path) 
+        self.export_footprints(footprints, output_path, file_prefix) 
         
         # Export metrics to individual text files
         print("\nExporting metrics to text files...")
-        self.export_metrics_to_text_files(footprints, output_path)
+        self.export_metrics_to_text_files(footprints, output_path, file_prefix)
         
         # Create various overlap maps
         
@@ -1338,18 +1344,24 @@ class FootprintMap:
             return None
 
     def create_vertical_overlap_map(self, footprints: List[Dict], output_path: str, 
-                                  filename: str = "Image_Vertical_Overlap_Map.png") -> Optional[str]:
+                                  file_prefix: str = "Image_",
+                                  filename: str = None) -> Optional[str]:
         """
         Create a map showing vertical overlap between sequential images
         
         Args:
             footprints: List of dictionaries with footprint data
             output_path: Directory to save the output files
+            file_prefix: Dive-specific prefix for output files
             filename: Filename for the generated map
             
         Returns:
             Path to the saved plot file, or None if no data or error
         """
+        # Set default filename using file_prefix if not provided
+        if filename is None:
+            filename = f"{file_prefix}Vertical_Overlap_Map.png"
+        
         if not GEOPANDAS_AVAILABLE:
             print("Geopandas not available. Cannot create vertical overlap map.")
             return None
@@ -1463,18 +1475,24 @@ class FootprintMap:
             return None
 
     def create_horizontal_overlap_map(self, footprints: List[Dict], output_path: str, 
-                                   filename: str = "Image_Horizontal_Overlap_Map.png") -> Optional[str]:
+                                   file_prefix: str = "Image_",
+                                   filename: str = None) -> Optional[str]:
         """
         Create a map showing horizontal overlap between non-sequential images
         
         Args:
             footprints: List of dictionaries with footprint data
             output_path: Directory to save the output files
+            file_prefix: Dive-specific prefix for output files
             filename: Filename for the generated map
             
         Returns:
             Path to the saved plot file, or None if no data or error
         """
+        # Set default filename using file_prefix if not provided
+        if filename is None:
+            filename = f"{file_prefix}Horizontal_Overlap_Map.png"
+        
         if not GEOPANDAS_AVAILABLE:
             print("Geopandas not available. Cannot create horizontal overlap map.")
             return None
@@ -1588,18 +1606,24 @@ class FootprintMap:
             return None
 
     def create_overall_overlap_map(self, footprints: List[Dict], output_path: str, 
-                                filename: str = "Image_Overall_Overlap_Map.png") -> Optional[str]:
+                                file_prefix: str = "Image_",
+                                filename: str = None) -> Optional[str]:
         """
         Create a map showing overall overlap counts with rainbow color gradient
         
         Args:
             footprints: List of dictionaries with footprint data
             output_path: Directory to save the output files
+            file_prefix: Dive-specific prefix for output files
             filename: Filename for the generated map
             
         Returns:
             Path to the saved plot file, or None if no data or error
         """
+        # Set default filename using file_prefix if not provided
+        if filename is None:
+            filename = f"{file_prefix}Overall_Overlap_Map.png"
+        
         if not GEOPANDAS_AVAILABLE:
             print("Geopandas not available. Cannot create overall overlap map.")
             return None
@@ -1709,13 +1733,14 @@ class FootprintMap:
             print(traceback.format_exc())
             return None
 
-    def export_footprints(self, footprints: List[Dict], output_path: str) -> Dict:
+    def export_footprints(self, footprints: List[Dict], output_path: str, file_prefix: str = "Image_") -> Dict:
         """
         Export footprint data to CSV and shapefile formats
         
         Args:
             footprints: List of footprint data dictionaries
             output_path: Directory to save the output files
+            file_prefix: Dive-specific prefix for output files
             
         Returns:
             Dictionary with paths to the exported files
@@ -1815,24 +1840,61 @@ class FootprintMap:
             df = pd.DataFrame(export_data)
             
             # First check if the main metrics CSV already exists
-            main_csv = os.path.join(output_path, "Image_Metrics.csv")
+            main_csv = os.path.join(output_path, f"{file_prefix}Metrics.csv")
             
             if os.path.exists(main_csv):
-                # Use the main CSV name but don't overwrite it - we'll update it elsewhere
-                # via _update_master_csv_with_footprint_results
+                # Load existing master CSV and merge footprint data
+                print(f"Updating existing {file_prefix}Metrics.csv with footprint data...")
                 result_files['csv'] = main_csv
-                print(f"Using existing Image_Metrics.csv for updates")
                 
-                # Also export a footprints-specific CSV for reference
-                detail_csv = os.path.join(output_path, "Analysis_footprints.csv") 
-                df.to_csv(detail_csv, index=False)
-                result_files['detail_csv'] = detail_csv
-                print(f"Footprint details exported to: {detail_csv}")
+                try:
+                    # Load existing CSV
+                    existing_df = pd.read_csv(main_csv)
+                    
+                    # Add footprint columns if they don't exist
+                    footprint_cols = ['footprint_width', 'footprint_height', 'footprint_area', 
+                                    'vertical_overlap', 'horizontal_overlap', 'overall_overlap']
+                    for col in footprint_cols:
+                        if col not in existing_df.columns:
+                            existing_df[col] = None
+                    
+                    # Update footprint data by matching filenames
+                    for idx, row in existing_df.iterrows():
+                        filename = os.path.basename(row['filename']) if 'filename' in row else None
+                        if filename:
+                            # Find matching footprint data
+                            matching_fp = next((fp for fp in footprints if os.path.basename(fp.get('filename', '')) == filename), None)
+                            if matching_fp:
+                                existing_df.at[idx, 'footprint_width'] = matching_fp.get('width')
+                                existing_df.at[idx, 'footprint_height'] = matching_fp.get('height')
+                                existing_df.at[idx, 'footprint_area'] = matching_fp.get('area')
+                                
+                                # Add overlap data from our export_data
+                                matching_export = next((d for d in export_data if os.path.basename(d['filename']) == filename), None)
+                                if matching_export:
+                                    if 'vertical_overlap' in matching_export:
+                                        existing_df.at[idx, 'vertical_overlap'] = matching_export['vertical_overlap']
+                                    if 'horizontal_overlap' in matching_export:
+                                        existing_df.at[idx, 'horizontal_overlap'] = matching_export['horizontal_overlap']
+                                    if 'overall_overlap' in matching_export:
+                                        existing_df.at[idx, 'overall_overlap'] = matching_export['overall_overlap']
+                    
+                    # Save updated master CSV
+                    existing_df.to_csv(main_csv, index=False)
+                    print(f"✓ Updated {file_prefix}Metrics.csv with footprint and overlap data")
+                    
+                except Exception as e:
+                    print(f"Warning: Could not update master CSV: {e}")
+                    # Fall back to creating detail CSV
+                    detail_csv = os.path.join(output_path, f"{file_prefix}Analysis_footprints.csv") 
+                    df.to_csv(detail_csv, index=False)
+                    result_files['detail_csv'] = detail_csv
+                    print(f"Footprint details exported to: {detail_csv}")
             else:
                 # No main CSV exists, create one with footprint data
                 df.to_csv(main_csv, index=False)
                 result_files['csv'] = main_csv
-                print(f"Created new Image_Metrics.csv with footprint data: {main_csv}")
+                print(f"Created new {file_prefix}Metrics.csv with footprint data: {main_csv}")
             
             # Export to shapefile if geopandas is available
             if GEOPANDAS_AVAILABLE:
@@ -1847,7 +1909,7 @@ class FootprintMap:
                     gdf.crs = "EPSG:4326"
                     
                     # Export to shapefile
-                    shapefile = os.path.join(output_path, "Image_Footprints.shp")
+                    shapefile = os.path.join(output_path, f"{file_prefix}Footprints.shp")
                     gdf.to_file(shapefile)
                     result_files['shapefile'] = shapefile
                     print(f"Footprint data exported to shapefile: {shapefile}")
@@ -1862,7 +1924,7 @@ class FootprintMap:
                         poly_gdf.crs = "EPSG:4326"
                         
                         # Export polygon shapefile
-                        poly_shapefile = os.path.join(output_path, "Image_Footprint_Polygons.shp")
+                        poly_shapefile = os.path.join(output_path, f"{file_prefix}Footprint_Polygons.shp")
                         poly_gdf.to_file(poly_shapefile)
                         result_files['polygon_shapefile'] = poly_shapefile
                         print(f"Footprint polygons exported to shapefile: {poly_shapefile}")
@@ -1878,29 +1940,30 @@ class FootprintMap:
             print(traceback.format_exc())
             return result_files
 
-    def export_metrics_to_text_files(self, footprints: List[Dict], output_path: str) -> None:
+    def export_metrics_to_text_files(self, footprints: List[Dict], output_path: str, file_prefix: str = "Image_") -> None:
         """
         Export all calculated metrics to individual text files
         
         Args:
             footprints: List of footprint data dictionaries
             output_path: Directory to save the output files
+            file_prefix: Dive-specific prefix for output files
         """
         try:
             # Export basic footprint metrics
-            self._export_footprint_metrics(footprints, output_path)
+            self._export_footprint_metrics(footprints, output_path, file_prefix)
             
             # Export vertical overlap metrics
             if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:
-                self._export_vertical_overlap_metrics(output_path)
+                self._export_vertical_overlap_metrics(output_path, file_prefix)
             
             # Export horizontal overlap metrics  
             if hasattr(self, 'horizontal_overlap_stats') and self.horizontal_overlap_stats:
-                self._export_horizontal_overlap_metrics(output_path)
+                self._export_horizontal_overlap_metrics(output_path, file_prefix)
             
             # Export overall overlap metrics
             if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats:
-                self._export_overall_overlap_metrics(output_path)
+                self._export_overall_overlap_metrics(output_path, file_prefix)
             
             print("All metrics exported to text files successfully")
             
@@ -1909,10 +1972,10 @@ class FootprintMap:
             import traceback
             print(traceback.format_exc())
 
-    def _export_footprint_metrics(self, footprints: List[Dict], output_path: str) -> None:
+    def _export_footprint_metrics(self, footprints: List[Dict], output_path: str, file_prefix: str = "Image_") -> None:
         """Export basic footprint metrics to text file"""
         try:
-            metrics_file = os.path.join(output_path, "Image_Footprint_Metrics.txt")
+            metrics_file = os.path.join(output_path, f"{file_prefix}Footprint_Metrics.txt")
             
             with open(metrics_file, 'w') as f:
                 f.write("FOOTPRINT ANALYSIS METRICS\n")
@@ -1966,10 +2029,10 @@ class FootprintMap:
         except Exception as e:
             print(f"Error exporting footprint metrics: {e}")
 
-    def _export_vertical_overlap_metrics(self, output_path: str) -> None:
+    def _export_vertical_overlap_metrics(self, output_path: str, file_prefix: str = "Image_") -> None:
         """Export vertical overlap metrics to text file"""
         try:
-            metrics_file = os.path.join(output_path, "Image_Vertical_Overlap_Metrics.txt")
+            metrics_file = os.path.join(output_path, f"{file_prefix}Vertical_Overlap_Metrics.txt")
             stats = self.vertical_overlap_stats
             
             with open(metrics_file, 'w') as f:
@@ -2000,10 +2063,10 @@ class FootprintMap:
         except Exception as e:
             print(f"Error exporting vertical overlap metrics: {e}")
 
-    def _export_horizontal_overlap_metrics(self, output_path: str) -> None:
+    def _export_horizontal_overlap_metrics(self, output_path: str, file_prefix: str = "Image_") -> None:
         """Export horizontal overlap metrics to text file"""
         try:
-            metrics_file = os.path.join(output_path, "Image_Horizontal_Overlap_Metrics.txt")
+            metrics_file = os.path.join(output_path, f"{file_prefix}Horizontal_Overlap_Metrics.txt")
             stats = self.horizontal_overlap_stats
             
             with open(metrics_file, 'w') as f:
@@ -2036,10 +2099,10 @@ class FootprintMap:
         except Exception as e:
             print(f"Error exporting horizontal overlap metrics: {e}")
 
-    def _export_overall_overlap_metrics(self, output_path: str) -> None:
+    def _export_overall_overlap_metrics(self, output_path: str, file_prefix: str = "Image_") -> None:
         """Export overall overlap metrics to text file"""
         try:
-            metrics_file = os.path.join(output_path, "Image_Overall_Overlap_Metrics.txt")
+            metrics_file = os.path.join(output_path, f"{file_prefix}Overall_Overlap_Metrics.txt")
             stats = self.overall_overlap_stats
             
             with open(metrics_file, 'w') as f:
@@ -2577,7 +2640,7 @@ class FootprintMap:
             print(f"Error in simple photogrammetric detection: {e}")
             return []
 
-    def create_zoomed_maps(self, footprints: List[Dict], subsets: List[Dict], output_path: str):
+    def create_zoomed_maps(self, footprints: List[Dict], subsets: List[Dict], output_path: str, file_prefix: str = "Image_"):
         """
         Create zoomed maps for identified subsets
         
@@ -2585,6 +2648,7 @@ class FootprintMap:
             footprints: Full list of footprint data
             subsets: List of subset dictionaries from identify_subsets
             output_path: Directory to save output files
+            file_prefix: Dive-specific prefix for output files
         """
         if not subsets:
             print("No subsets available for zoomed maps")
@@ -2599,17 +2663,17 @@ class FootprintMap:
                 print(f"Creating zoomed maps for {subset['name']} ({subset['count']} images)")
                 
                 # Create zoomed footprint map
-                self._create_zoomed_footprint_map(subset, output_path, f"Image_Footprint_Map_Zoomed_{subset_name}.png")
+                self._create_zoomed_footprint_map(subset, output_path, f"{file_prefix}Footprint_Map_Zoomed_{subset_name}.png")
                 
                 # Create zoomed overlap maps if we have overlap data
                 if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:
-                    self._create_zoomed_vertical_overlap_map(subset, output_path, f"Image_Vertical_Overlap_Map_Zoomed_{subset_name}.png")
+                    self._create_zoomed_vertical_overlap_map(subset, output_path, f"{file_prefix}Vertical_Overlap_Map_Zoomed_{subset_name}.png")
                 
                 if hasattr(self, 'horizontal_overlap_stats') and self.horizontal_overlap_stats:
-                    self._create_zoomed_horizontal_overlap_map(subset, output_path, f"Image_Horizontal_Overlap_Map_Zoomed_{subset_name}.png")
+                    self._create_zoomed_horizontal_overlap_map(subset, output_path, f"{file_prefix}Horizontal_Overlap_Map_Zoomed_{subset_name}.png")
                 
                 if hasattr(self, 'overall_overlap_stats') and self.overall_overlap_stats:
-                    self._create_zoomed_overall_overlap_map(subset, output_path, f"Image_Overall_Overlap_Map_Zoomed_{subset_name}.png")
+                    self._create_zoomed_overall_overlap_map(subset, output_path, f"{file_prefix}Overall_Overlap_Map_Zoomed_{subset_name}.png")
         
         except Exception as e:
             print(f"Error creating zoomed maps: {e}")
@@ -2846,18 +2910,24 @@ class FootprintMap:
             print(f"Error creating zoomed overall overlap map: {e}")
 
     def create_footprint_map_from_csv(self, csv_path: str, output_folder: str, 
-                                     filename: str = "Image_Footprints_Map.png") -> Optional[str]:
+                                     file_prefix: str = "Image_",
+                                     filename: str = None) -> Optional[str]:
         """
         Create footprint map from the master CSV file
         
         Args:
-            csv_path: Path to the master Image_Metrics.csv file
+            csv_path: Path to the master Metrics.csv file
             output_folder: Directory to save the footprint map
+            file_prefix: Dive-specific prefix for output files
             filename: Name for the output file
             
         Returns:
             Path to created footprint map file, or None if failed
         """
+        # Set default filename using file_prefix if not provided
+        if filename is None:
+            filename = f"{file_prefix}Footprints_Map.png"
+        
         try:
             import pandas as pd
             

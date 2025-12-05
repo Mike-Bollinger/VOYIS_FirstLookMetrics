@@ -1,3 +1,63 @@
+def extract_dive_number(path):
+    """
+    Extract dive number from a file or directory path.
+    
+    Searches for patterns like DIVE###, Dive###, dive### in the path.
+    Returns formatted as DIVE### with at least 3 digits (zero-padded if needed).
+    
+    Args:
+        path: File or directory path string
+        
+    Returns:
+        Formatted dive string (e.g., "DIVE015") or None if not found
+        
+    Examples:
+        "Q:\\EN2501\\Image_LLS\\DIVE015_Stokey\\image_raw" -> "DIVE015"
+        "Q:\\EN2501\\Image_LLS\\dive15_Stokey\\image_raw" -> "DIVE015"
+        "Q:\\EN2501\\Image_LLS\\Dive2\\image_raw" -> "DIVE002"
+    """
+    import re
+    
+    if not path:
+        return None
+    
+    # Pattern matches: DIVE, Dive, or dive followed by 1-4 digits
+    # Case insensitive search for dive followed by numbers
+    pattern = r'[Dd][Ii][Vv][Ee](\d{1,4})'
+    
+    match = re.search(pattern, str(path))
+    if match:
+        dive_num = match.group(1)
+        # Pad with zeros to ensure at least 3 digits
+        dive_num_padded = dive_num.zfill(3)
+        return f"DIVE{dive_num_padded}"
+    
+    return None
+
+
+def get_output_prefix(path, module_type):
+    """
+    Get output file prefix based on dive number and module type.
+    
+    Args:
+        path: Input file or directory path
+        module_type: Type of module ('Image', 'Nav', 'LLS')
+        
+    Returns:
+        Prefix string (e.g., "DIVE015_Image_" or "Image_" if no dive found)
+        
+    Examples:
+        get_output_prefix("Q:\\EN2501\\DIVE015\\images", "Image") -> "DIVE015_Image_"
+        get_output_prefix("Q:\\EN2501\\data\\images", "Image") -> "Image_"
+    """
+    dive_number = extract_dive_number(path)
+    
+    if dive_number:
+        return f"{dive_number}_{module_type}_"
+    else:
+        return f"{module_type}_"
+
+
 def list_files_in_directory(directory):
     import os
     return [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
@@ -73,7 +133,9 @@ def convert_csv_to_shapefile(csv_path, output_shapefile_path=None, log_callback=
         # Determine output path
         if output_shapefile_path is None:
             csv_dir = os.path.dirname(csv_path)
-            output_shapefile_path = os.path.join(csv_dir, "Image_Metrics.shp")
+            # Use the same base name as the CSV file
+            csv_basename = os.path.splitext(os.path.basename(csv_path))[0]
+            output_shapefile_path = os.path.join(csv_dir, f"{csv_basename}.shp")
         
         # Export to shapefile
         gdf.to_file(output_shapefile_path)

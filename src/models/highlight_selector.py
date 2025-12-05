@@ -86,6 +86,7 @@ class HighlightSelector:
     def select_highlights(self,
                           input_folder: str,
                           output_folder: str,
+                          file_prefix: str = "Image_",
                           count: int = 10,
                           progress_callback: Optional[Callable] = None,
                           altitude_threshold: Optional[float] = None,
@@ -109,8 +110,8 @@ class HighlightSelector:
         try:
             self._ensure_imports()
             
-            # Create highlight images directory
-            highlight_dir = os.path.join(output_folder, "highlight_images")
+            # Create highlight images directory with file prefix
+            highlight_dir = os.path.join(output_folder, f"{file_prefix}highlight_images")
             os.makedirs(highlight_dir, exist_ok=True)
             
             # Setup logging function
@@ -173,7 +174,7 @@ class HighlightSelector:
             
             # Check if metrics already exist in Image_Metrics.csv
             log_message("Checking for existing metrics in Image_Metrics.csv...", progress=12)
-            existing_metrics_df = self.load_metrics_from_csv(output_folder, input_folder)
+            existing_metrics_df = self.load_metrics_from_csv(output_folder, input_folder, file_prefix)
             
             # Set up visibility map
             visibility_map = {}
@@ -240,7 +241,7 @@ class HighlightSelector:
                 # Load altitude data from CSV if available
                 altitude_map = {}
                 try:
-                    csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+                    csv_path = os.path.join(output_folder, f"{file_prefix}Metrics.csv")
                     if os.path.exists(csv_path):
                         df = self._pd.read_csv(csv_path)
                         if 'filename' in df.columns and 'altitude' in df.columns:
@@ -408,7 +409,7 @@ class HighlightSelector:
                 
                 # Export metrics to CSV for future use
                 try:
-                    self.export_metrics_to_csv(output_folder, metrics_df)
+                    self.export_metrics_to_csv(output_folder, metrics_df, file_prefix)
                     log_message("Exported calculated metrics to CSV for future use")
                 except Exception as e:
                     log_message(f"Warning: Could not save metrics to CSV: {e}")
@@ -502,7 +503,7 @@ class HighlightSelector:
                 
                 # Create highlight panel in the main output directory
                 try:
-                    panel_path = self.create_highlight_panel(highlight_dir, output_folder, top_images, top_count=4)
+                    panel_path = self.create_highlight_panel(highlight_dir, output_folder, top_images, file_prefix, top_count=4)
                     if panel_path:
                         log_message(f"Created highlight panel: {os.path.basename(panel_path)}")
                 except Exception as e:
@@ -1098,7 +1099,7 @@ class HighlightSelector:
             print(f"Error creating highlights HTML: {e}")
             return os.path.join(highlight_dir, "highlights.html")  # Return path even if failed
 
-    def create_highlight_panel(self, highlight_dir: str, output_folder: str, metrics_df, top_count: int = 4) -> str:
+    def create_highlight_panel(self, highlight_dir: str, output_folder: str, metrics_df, file_prefix: str = "Image_", top_count: int = 4) -> str:
         """
         Create a multi-panel image with the top highlights for report inclusion
         
@@ -1332,7 +1333,7 @@ class HighlightSelector:
             
             # Save the panel image with tight bbox to eliminate extra margins
             # Save to the main output directory with standardized name
-            panel_path = os.path.join(output_folder, "Image_Top_Highlights.png")
+            panel_path = os.path.join(output_folder, f"{file_prefix}Top_Highlights.png")
             fig.savefig(panel_path, dpi=300, bbox_inches='tight')
             self._plt.close(fig)
             
@@ -1342,20 +1343,21 @@ class HighlightSelector:
             print(f"Error creating highlight panel: {e}")
             return None
 
-    def export_metrics_to_csv(self, output_folder: str, metrics_df) -> bool:
+    def export_metrics_to_csv(self, output_folder: str, metrics_df, file_prefix: str = "Image_") -> bool:
         """
         Export image metrics to the Image_Metrics.csv file
         
         Args:
             output_folder: Directory containing Image_Metrics.csv
             metrics_df: DataFrame with calculated metrics
+            file_prefix: Dive-specific prefix for output files
             
         Returns:
             True if successful, False otherwise
         """
         try:
             self._ensure_imports()  # This will import pandas as self._pd
-            csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+            csv_path = os.path.join(output_folder, f"{file_prefix}Metrics.csv")
             
             # Check if the CSV file exists
             if os.path.exists(csv_path):
@@ -1419,20 +1421,21 @@ class HighlightSelector:
             print(traceback.format_exc())
             return False
 
-    def load_metrics_from_csv(self, output_folder: str, input_folder: str):
+    def load_metrics_from_csv(self, output_folder: str, input_folder: str, file_prefix: str = "Image_"):
         """
         Load pre-calculated metrics from Image_Metrics.csv if available
         
         Args:
             output_folder: Directory containing Image_Metrics.csv
             input_folder: Directory with input images to match with metrics
+            file_prefix: Dive-specific prefix for output files
             
         Returns:
             DataFrame with loaded metrics or empty DataFrame if not available
         """
         try:
             self._ensure_imports()  # This will import pandas as self._pd
-            csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+            csv_path = os.path.join(output_folder, f"{file_prefix}Metrics.csv")
             
             if not os.path.exists(csv_path):
                 print("No existing Image_Metrics.csv found")
@@ -1583,6 +1586,7 @@ class HighlightSelector:
             }
     
     def select_highlights_from_csv(self, csv_path: str, output_folder: str, 
+                                  file_prefix: str = "Image_",
                                   count: int = 10, progress_callback: Optional[Callable] = None,
                                   altitude_threshold: Optional[float] = None,
                                   min_altitude_threshold: Optional[float] = 2.0) -> List[str]:
@@ -1728,6 +1732,7 @@ class HighlightSelector:
             highlight_paths = self.select_highlights(
                 input_folder=input_folder,
                 output_folder=output_folder,
+                file_prefix=file_prefix,
                 count=count,
                 progress_callback=progress_callback,
                 altitude_threshold=altitude_threshold,
@@ -1789,3 +1794,4 @@ class HighlightSelector:
             
         except Exception as e:
             print(f"Error updating master CSV with highlight information: {e}")
+

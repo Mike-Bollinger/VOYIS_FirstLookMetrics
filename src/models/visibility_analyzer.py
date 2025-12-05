@@ -185,6 +185,23 @@ class VisibilityAnalyzer:
             self.log_message(f"Loading model from: {model_path}")
             model = self.tf.keras.models.load_model(model_path)
             
+            # Try to load category mapping if it exists
+            import json
+            category_mapping_path = model_path.replace('.h5', '_categories.json')
+            if os.path.exists(category_mapping_path):
+                try:
+                    with open(category_mapping_path, 'r') as f:
+                        mapping = json.load(f)
+                    self.categories = mapping['categories']
+                    self.log_message(f"✓ Loaded category mapping: {self.categories}")
+                except Exception as e:
+                    self.log_message(f"Warning: Could not load category mapping: {e}")
+                    self.log_message("Using default category order")
+            else:
+                self.log_message("⚠️ No category mapping file found")
+                self.log_message(f"Using default categories: {self.categories}")
+                self.log_message("RECOMMENDATION: Retrain the model to save category mapping")
+            
             # Verify model output matches expected categories
             output_shape = model.output_shape[-1]
             expected_categories = len(self.categories)
@@ -360,9 +377,21 @@ class VisibilityAnalyzer:
                     progress_callback(0, "Error: No category folders found in training data path")
                 return False
             
-            # Save categories for prediction
-            self.categories = sorted(category_folders)
-            self.log_message(f"Found categories: {self.categories}")
+            # Use consistent ordering (worst to best) instead of alphabetical
+            # This ensures model outputs match expected category indices
+            expected_order = ['zero', 'poor', 'fair', 'good', 'excellent']
+            found_categories = set(category_folders)
+            
+            # Use only categories that exist in the training data, in the expected order
+            self.categories = [cat for cat in expected_order if cat in found_categories]
+            
+            # Add any unexpected categories at the end
+            unexpected = sorted(found_categories - set(self.categories))
+            if unexpected:
+                self.log_message(f"Warning: Found unexpected categories: {unexpected}")
+                self.categories.extend(unexpected)
+            
+            self.log_message(f"Training with categories in order: {self.categories}")
             
             # Load all images and labels
             images = []
@@ -490,6 +519,17 @@ class VisibilityAnalyzer:
                 model.save(model_save_path)
                 self.log_message(f"Model saved to: {model_save_path}")
                 
+                # Save category mapping alongside the model
+                import json
+                category_mapping_path = model_save_path.replace('.h5', '_categories.json')
+                with open(category_mapping_path, 'w') as f:
+                    json.dump({
+                        'categories': self.categories,
+                        'num_classes': len(self.categories),
+                        'order': 'worst_to_best'
+                    }, f, indent=2)
+                self.log_message(f"Category mapping saved to: {category_mapping_path}")
+                
                 if progress_callback:
                     progress_callback(95, f"Model saved to: {model_save_path}")
                     
@@ -506,6 +546,7 @@ class VisibilityAnalyzer:
             return False
     
     def analyze_images(self, image_paths: List[str], output_folder: str, 
+                      file_prefix: str = "Image_",
                       progress_callback: Optional[Callable] = None,
                       altitude_threshold: float = 8.0) -> Tuple[bool, Dict]:
         """
@@ -677,7 +718,7 @@ class VisibilityAnalyzer:
             # Save results to CSV
             log_message("Saving results and creating visualizations...", progress=90)
             
-            csv_path = os.path.join(output_folder, "Image_Visibility_Results.csv")
+            csv_path = os.path.join(output_folder, f"{file_prefix}Visibility_Results.csv")
             try:
                 df = self._pd.DataFrame(results)
                 
@@ -697,7 +738,7 @@ class VisibilityAnalyzer:
                 if self._plt:
                     try:
                         log_message("Creating visualizations...", progress=95)
-                        chart_path = self.create_visibility_chart(csv_path, output_folder)
+                        chart_path = self.create_visibility_chart(csv_path, output_folder, file_prefix)
                         if chart_path and os.path.exists(chart_path):
                             log_message(f"✓ Visibility chart created: {chart_path}")
                     except Exception as chart_error:
@@ -724,7 +765,7 @@ class VisibilityAnalyzer:
             log_message(f"Error during visibility analysis: {e}")
             return False, {}
 
-    def create_visibility_chart(self, csv_path: str, output_folder: str) -> Optional[str]:
+    def create_visibility_chart(self, csv_path: str, output_folder: str, file_prefix: str = "Image_") -> Optional[str]:
         """Create an enhanced colorful visibility distribution chart with example thumbnails"""
         try:
             if not self._plt or not self._cv2:
@@ -860,7 +901,7 @@ class VisibilityAnalyzer:
                 ax.axis('off')
             
             self._plt.tight_layout()
-            chart_path = os.path.join(output_folder, "Image_Visibility_Analysis.png")
+            chart_path = os.path.join(output_folder, f"{file_prefix}Visibility_Analysis.png")
             self._plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
             self._plt.close()
             
@@ -872,7 +913,7 @@ class VisibilityAnalyzer:
             self.log_message(traceback.format_exc())
             return None
         
-    def export_visibility_metrics(self, output_path: str, analysis_results: Dict) -> None:
+    def export_visibility_metrics(self, output_path: str, analysis_results: Dict, file_prefix: str = "Image_") -> None:
         """
         Export visibility analysis metrics to a text file
         
@@ -881,7 +922,7 @@ class VisibilityAnalyzer:
             analysis_results: Results dictionary from analyze_images method
         """
         try:
-            metrics_file = os.path.join(output_path, "Image_Visibility_Metrics.txt")
+            metrics_file = os.path.join(output_path, f"{file_prefix}Visibility_Metrics.txt")
             
             with open(metrics_file, 'w') as f:
                 f.write("VOYIS First Look Metrics - Visibility Analysis Report\n")
@@ -946,6 +987,7 @@ class VisibilityAnalyzer:
             print(f"Error exporting visibility metrics: {str(e)}")
     
     def analyze_images_from_csv(self, csv_path: str, output_folder: str, 
+                              file_prefix: str = "Image_",
                               progress_callback: Optional[Callable] = None) -> bool:
         """
         Analyze images for visibility using the master CSV file
@@ -1024,6 +1066,7 @@ class VisibilityAnalyzer:
             success, results = self.analyze_images(
                 image_paths=image_paths,
                 output_folder=output_folder,
+                file_prefix=file_prefix,
                 progress_callback=progress_callback
             )
             

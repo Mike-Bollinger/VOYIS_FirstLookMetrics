@@ -76,7 +76,8 @@ class AltitudeMap:
     
     def create_location_map(self, gps_data: List[Dict], output_path: str, 
                        filename: str = None,
-                       metrics=None) -> Optional[str]:
+                       metrics=None,
+                       file_prefix: str = "Image_") -> Optional[str]:
         """Create location map with outlier handling"""
         if not gps_data:
             print("No GPS data available")
@@ -261,7 +262,7 @@ class AltitudeMap:
                 
                 # Save plot with standardized naming
                 if filename is None:
-                    filename = "Image_Locations_Map.png"
+                    filename = f"{file_prefix}Locations_Map.png"
                 output_file = os.path.join(output_path, filename)
                 plt.savefig(output_file, dpi=300, bbox_inches='tight')
                 plt.close(fig)  # Close the figure to free memory
@@ -280,7 +281,8 @@ class AltitudeMap:
     
     def create_altitude_histogram(self, gps_data: List[Dict], output_path: str, 
                          filename: str = None,
-                         max_display_altitude: float = 50.0) -> Optional[str]:
+                         max_display_altitude: float = 50.0,
+                         file_prefix: str = "Image_") -> Optional[str]:
         """
         Create a histogram of image altitudes
         
@@ -456,7 +458,7 @@ class AltitudeMap:
             
             # Save plot with standardized naming
             if filename is None:
-                filename = "Image_Altitude_Histogram.png"
+                filename = f"{file_prefix}Altitude_Histogram.png"
             output_file = os.path.join(output_path, filename)
             plt.savefig(output_file, dpi=300, bbox_inches='tight')
             plt.close(fig)  # Close the figure to free memory
@@ -471,18 +473,25 @@ class AltitudeMap:
             return None
     
     def export_to_gis_formats(self, gps_data: List[Dict], output_path: str, 
-                             csv_filename: str = "Image_Location_Metrics.csv",
-                             shapefile_filename: str = "Image_Locations.shp") -> Dict[str, str]:
+                             file_prefix: str = "Image_",
+                             csv_filename: str = None,
+                             shapefile_filename: str = None) -> Dict[str, str]:
         """Export GPS data to CSV and Shapefile formats"""
         result_files = {}
         print("\n--- STARTING GIS EXPORT ---")
+        
+        # Set default filenames using file_prefix if not provided
+        if csv_filename is None:
+            csv_filename = f"{file_prefix}Location_Metrics.csv"
+        if shapefile_filename is None:
+            shapefile_filename = f"{file_prefix}Locations.shp"
         
         try:
             # Create output directory if it doesn't exist
             os.makedirs(output_path, exist_ok=True)
             
             # First check if the standard CSV already exists - don't overwrite it
-            standard_csv = os.path.join(output_path, "Image_Metrics.csv")
+            standard_csv = os.path.join(output_path, f"{file_prefix}Metrics.csv")
             if os.path.exists(standard_csv):
                 # Use the existing file as our result but don't modify it
                 result_files['csv'] = standard_csv
@@ -654,3 +663,4 @@ class AltitudeMap:
             
         ax.text(bar_x + scale_bar_degrees/2, bar_y + tick_height*2, 
                label, ha='center', va='bottom')
+

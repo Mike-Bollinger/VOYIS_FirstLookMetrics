@@ -1042,7 +1042,8 @@ class Metrics:
     
     def create_image_metrics_csv(self, input_folder: str, output_folder: str, 
                                 nav_file: str = None, 
-                                progress_callback: Callable = None) -> Optional[str]:
+                                progress_callback: Callable = None,
+                                file_prefix: str = "Image_") -> Optional[str]:
         """
         Create the master Image_Metrics.csv file containing all image data and metrics
         
@@ -1051,6 +1052,7 @@ class Metrics:
             output_folder: Path to output directory where CSV will be saved
             nav_file: Optional path to navigation file for heading data
             progress_callback: Optional callback for progress updates
+            file_prefix: Optional prefix for output filename (e.g., "DIVE015_image_")
             
         Returns:
             Path to created CSV file or None if failed
@@ -1091,8 +1093,9 @@ class Metrics:
             if progress_callback:
                 progress_callback(30, "Creating master CSV structure...")
             
-            # Create the master CSV path
-            csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+            # Create the master CSV path with prefix
+            csv_filename = f"{file_prefix}Metrics.csv"
+            csv_path = os.path.join(output_folder, csv_filename)
             
             # Prepare data for CSV
             csv_data = []
@@ -1545,4 +1548,5 @@ class Metrics:
                 return closest_depth
                 
         return None
+
 

@@ -9,6 +9,7 @@ import threading
 import glob
 import subprocess
 from typing import Optional, Callable, Dict, Any, List, Tuple
+from src.utils.file_utils import extract_dive_number, get_output_prefix
 
 class ProcessingController:
     """Controls the main processing workflow"""
@@ -17,6 +18,10 @@ class ProcessingController:
         # Add stop processing flag
         self.stop_processing_flag = False
         self.current_processing_thread = None
+        # Initialize dive prefix attributes
+        self.dive_prefix_image = None
+        self.dive_prefix_nav = None
+        self.dive_prefix_lls = None
     
     def setup_ui_update_thread(self):
         """Set up a queue and thread for updating the UI from background threads"""
@@ -177,6 +182,37 @@ class ProcessingController:
             if hasattr(self, 'stop_button'):
                 self.root.after(0, lambda: self.stop_button.configure(state=tk.DISABLED))
 
+    def extract_dive_prefixes(self, input_folder=None):
+        """Extract dive number prefixes from input paths for all modules"""
+        # Extract from image input path
+        if input_folder:
+            self.dive_prefix_image = get_output_prefix(input_folder, "Image")
+            dive_num = extract_dive_number(input_folder)
+            if dive_num:
+                self.log_message(f"Detected dive number from image path: {dive_num}")
+        else:
+            self.dive_prefix_image = "Image_"
+        
+        # Extract from navigation directory path
+        if hasattr(self, 'nav_directory_path') and self.nav_directory_path.get():
+            nav_path = self.nav_directory_path.get()
+            self.dive_prefix_nav = get_output_prefix(nav_path, "Nav")
+            dive_num = extract_dive_number(nav_path)
+            if dive_num:
+                self.log_message(f"Detected dive number from nav path: {dive_num}")
+        else:
+            self.dive_prefix_nav = "Nav_"
+        
+        # Extract from LLS input path
+        if hasattr(self, 'lls_path') and self.lls_path.get():
+            lls_path = self.lls_path.get()
+            self.dive_prefix_lls = get_output_prefix(lls_path, "LLS")
+            dive_num = extract_dive_number(lls_path)
+            if dive_num:
+                self.log_message(f"Detected dive number from LLS path: {dive_num}")
+        else:
+            self.dive_prefix_lls = "LLS_"
+
     def analyze_images(self, input_folder, output_folder, skip_nav_processing=False):
         """Process images and LLS data based on selected functions
         
@@ -187,6 +223,9 @@ class ProcessingController:
         """
         try:
             self.update_progress(0, "Starting processing...")
+            
+            # Extract dive prefixes from input paths
+            self.extract_dive_prefixes(input_folder)
                        
             # Check what processing is selected
             nav_selected = self.nav_processing_var.get()
@@ -289,8 +328,8 @@ class ProcessingController:
                     
                     self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
                     
-                    # Image_Metrics.csv already contains all GPS and EXIF data
-                    self.log_message("✓ Image_Metrics.csv contains all required GPS and EXIF data")
+                    # Metrics CSV will contain all GPS and EXIF data
+                    self.log_message("✓ Metrics CSV will contain all required GPS and EXIF data")
                     
                 except Exception as metadata_error:
                     self.log_message(f"✗ Error extracting metadata: {metadata_error}")
@@ -342,12 +381,16 @@ class ProcessingController:
                                     nav_file = file_path
                                     break
                         
+                        # Use dive prefix if available
+                        dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                        
                         if hasattr(self.metrics, 'create_image_metrics_csv_parallel'):
                             csv_path = self.metrics.create_image_metrics_csv_parallel(
                                 input_folder, 
                                 output_folder, 
                                 nav_file, 
-                                progress_callback=lambda p, msg="Creating master CSV...": self.update_progress(p, msg)
+                                progress_callback=lambda p, msg="Creating master CSV...": self.update_progress(p, msg),
+                                file_prefix=dive_prefix
                             )
                         else:
                             # Fallback to original method
@@ -355,7 +398,8 @@ class ProcessingController:
                                 input_folder, 
                                 output_folder, 
                                 nav_file, 
-                                progress_callback=lambda p, msg="Creating master CSV...": self.update_progress(p, msg)
+                                progress_callback=lambda p, msg="Creating master CSV...": self.update_progress(p, msg),
+                                file_prefix=dive_prefix
                             )
                         
                         if csv_path:
@@ -424,11 +468,15 @@ class ProcessingController:
             # Convert Image_Metrics.csv to Shapefile (if it exists)
             # This happens regardless of which boxes are checked, as long as any imagery processing occurred
             if imagery_selected:
-                self.log_message("\nFINAL STEP: Converting Image_Metrics.csv to ESRI Shapefile...")
+                self.log_message("\nFINAL STEP: Converting metrics CSV to ESRI Shapefile...")
                 try:
                     from src.utils.file_utils import convert_csv_to_shapefile
                     
-                    csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+                    # Use the dive-prefixed CSV name
+                    dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                    csv_filename = f"{dive_prefix}Metrics.csv"
+                    csv_path = os.path.join(output_folder, csv_filename)
+                    
                     if os.path.exists(csv_path):
                         shapefile_path = convert_csv_to_shapefile(
                             csv_path=csv_path,
@@ -440,7 +488,7 @@ class ProcessingController:
                         else:
                             self.log_message("⚠ Shapefile export skipped (no coordinates or geopandas unavailable)")
                     else:
-                        self.log_message("⚠ Image_Metrics.csv not found - shapefile export skipped")
+                        self.log_message(f"⚠ {csv_filename} not found - shapefile export skipped")
                         
                 except Exception as shapefile_error:
                     self.log_message(f"⚠ Error during shapefile export: {shapefile_error}")
@@ -499,12 +547,16 @@ class ProcessingController:
             
             self.log_message(f"       Using navigation directory: {nav_directory}")
             
+            # Use dive prefix if available, otherwise use default
+            dive_prefix = self.dive_prefix_nav if hasattr(self, 'dive_prefix_nav') and self.dive_prefix_nav else "nav_"
+            
             # Process using directory method
             success = nav_plotter.process_navigation_directory(
                 nav_directory=nav_directory,
                 output_dir=output_folder,
                 dive_name="Navigation",
-                log_callback=self.log_message
+                log_callback=self.log_message,
+                file_prefix=dive_prefix
             )
             
             if success:
@@ -546,6 +598,9 @@ class ProcessingController:
             progress_offset = 0
             progress_scale = 30
             
+            # Use dive prefix if available, otherwise use default
+            dive_prefix = self.dive_prefix_lls if hasattr(self, 'dive_prefix_lls') and self.dive_prefix_lls else "lls_"
+            
             lls_processor = LLSProcessor(
                 log_callback=self.log_message,
                 progress_callback=lambda value, msg: self.update_progress(
@@ -553,7 +608,7 @@ class ProcessingController:
                 )
             )
             
-            success = lls_processor.process_lls_data(lls_folder, nav_file, output_folder)
+            success = lls_processor.process_lls_data(lls_folder, nav_file, output_folder, file_prefix=dive_prefix)
             
             if success:
                 self.log_message("✓ LLS data processing completed successfully")
@@ -675,7 +730,8 @@ class ProcessingController:
                     self.log_message(f"       {line}")
                 
                 # Save results to file
-                metrics_file = os.path.join(output_folder, "Image_Metrics.txt")
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "Image_"
+                metrics_file = os.path.join(output_folder, f"{dive_prefix}Metrics.txt")
                 with open(metrics_file, "w") as f:
                     f.write("\n".join(results))
                 
@@ -702,11 +758,15 @@ class ProcessingController:
                 return
             
             try:
+                # Use dive prefix if available
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                
                 # Call the correct method with GPS data from metrics
                 map_file = self.altitude_map.create_location_map(
                     self.metrics.gps_data,
                     output_folder,
-                    metrics=self.metrics
+                    metrics=self.metrics,
+                    file_prefix=dive_prefix
                 )
                 
                 if map_file and os.path.exists(map_file):
@@ -716,7 +776,8 @@ class ProcessingController:
                     try:
                         result_files = self.altitude_map.export_to_gis_formats(
                             self.metrics.gps_data,
-                            output_folder
+                            output_folder,
+                            file_prefix=dive_prefix
                         )
                         
                         if 'csv' in result_files:
@@ -754,10 +815,14 @@ class ProcessingController:
                 return
             
             try:
+                # Use dive prefix if available
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                
                 # Call the correct method with GPS data from metrics
                 histogram_file = self.altitude_map.create_altitude_histogram(
                     self.metrics.gps_data,
-                    output_folder
+                    output_folder,
+                    file_prefix=dive_prefix
                 )
                 
                 if histogram_file and os.path.exists(histogram_file):
@@ -789,19 +854,25 @@ class ProcessingController:
                 self.footprint_map.altitude_threshold = self.altitude_threshold
                 
                 # First try to use the CSV data if available
-                csv_path = os.path.join(output_folder, "Image_Metrics.csv")
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                csv_filename = f"{dive_prefix}Metrics.csv"
+                csv_path = os.path.join(output_folder, csv_filename)
                 footprint_file = None
                 
                 if os.path.exists(csv_path):
                     self.log_message("  └─ Using Image_Metrics.csv for footprint analysis...")
+                    # Use dive prefix if available
+                    dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
                     # Use the new CSV-based method that includes heading data
                     footprint_file = self.footprint_map.create_footprint_map_from_csv(
                         csv_path,
                         output_folder,
-                        filename="Image_Footprints_Map.png"
+                        file_prefix=dive_prefix
                     )
                 else:
                     self.log_message("  └─ Using legacy GPS data for footprint analysis...")
+                    # Use dive prefix if available
+                    dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
                     # Get navigation file path if available
                     nav_file_path = None
                     if hasattr(self, 'nav_path') and self.nav_path.get():
@@ -812,7 +883,7 @@ class ProcessingController:
                         self.metrics.gps_data,
                         output_folder,
                         nav_file_path=nav_file_path,
-                        filename="Image_Footprints_Map.png"
+                        file_prefix=dive_prefix
                     )
                 
                 if footprint_file and os.path.exists(footprint_file):
@@ -892,16 +963,22 @@ class ProcessingController:
                 
                 self.log_message("       ✓ Model loaded, analyzing images...")
                 
-                # Create the master CSV path
-                master_csv = os.path.join(output_folder, "Image_Metrics.csv")
+                # Create the master CSV path with dive prefix
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                csv_filename = f"{dive_prefix}Metrics.csv"
+                master_csv = os.path.join(output_folder, csv_filename)
                 if not os.path.exists(master_csv):
-                    self.log_message("  └─ ⚠ Image_Metrics.csv not found, visibility analysis requires existing CSV")
+                    self.log_message(f"  └─ ⚠ {csv_filename} not found, visibility analysis requires existing CSV")
                     return
+                
+                # Use dive prefix if available
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
                 
                 # Run analysis using the CSV method to update the master CSV
                 success = self.visibility_analyzer.analyze_images_from_csv(
                     master_csv,    # Path to master CSV file
-                    output_folder  # Output folder for any additional files
+                    output_folder,  # Output folder for any additional files
+                    file_prefix=dive_prefix
                 )
                 
                 if success:
@@ -952,17 +1029,23 @@ class ProcessingController:
                 
                 self.log_message(f"       Processing images from master CSV...")
                 
-                # Create the master CSV path
-                master_csv = os.path.join(output_folder, "Image_Metrics.csv")
+                # Create the master CSV path with dive prefix
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                csv_filename = f"{dive_prefix}Metrics.csv"
+                master_csv = os.path.join(output_folder, csv_filename)
                 if not os.path.exists(master_csv):
-                    self.log_message("  └─ ⚠ Image_Metrics.csv not found, highlight selection requires existing CSV")
+                    self.log_message(f"  └─ ⚠ {csv_filename} not found, highlight selection requires existing CSV")
                     return
+                
+                # Use dive prefix if available
+                dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
                 
                 # Call the CSV-based highlight selector to update the master CSV
                 highlight_paths = self.highlight_selector.select_highlights_from_csv(
                     master_csv,       # Path to master CSV file
                     output_folder,    # Output folder for highlight images
                     count=10,         # Number of highlights to select
+                    file_prefix=dive_prefix,
                     progress_callback=None,  # Skip progress for batch processing
                     altitude_threshold=self.altitude_threshold,
                     min_altitude_threshold=2.0

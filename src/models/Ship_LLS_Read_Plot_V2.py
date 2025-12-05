@@ -383,7 +383,7 @@ def create_row_dict(file_number, file_name, date_time, time_unix,
     }
 
     
-def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHOLD=None, log_callback=None):
+def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHOLD=None, log_callback=None, file_prefix="LLS_"):
     """
     Create summary plots for the processed data.
     :param dfLS: DataFrame containing the processed data.
@@ -458,7 +458,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     plt.xlabel(f'Time on {date_str}')
     plt.ylabel('Depth (m)')
     plt.grid()
-    plt.savefig(os.path.join(plot_dir, "LLS_AUV_Dive_Profile.png"), facecolor='white', bbox_inches='tight')
+    plt.savefig(os.path.join(plot_dir, f"{file_prefix}AUV_Dive_Profile.png"), facecolor='white', bbox_inches='tight')
     plt.close()
     log_message("Generated dive profile plot")
 
@@ -472,7 +472,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
         # plt.title('Histogram of Good Btm Depth Values')
         # plt.xlim(0, -150)
         plt.grid()
-        plt.savefig(os.path.join(plot_dir, "LLS_AUV_Depth_Histogram.png"), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(plot_dir, f"{file_prefix}AUV_Depth_Histogram.png"), facecolor='white', bbox_inches='tight')
         plt.close()
         log_message("Generated depth histogram")
     else:
@@ -509,7 +509,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
         axs[1].set_ylim(0, 1600)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(plot_dir, f"LLS_AUV_Depth_Vs_Intensity.png"), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(plot_dir, f"{file_prefix}AUV_Depth_Vs_Intensity.png"), facecolor='white', bbox_inches='tight')
         plt.close()
         log_message("Generated intensity analysis plots")
     else:
@@ -532,7 +532,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
         # plt.title('AUV Position')
         plt.legend()
         plt.grid()
-        plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position.png"), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(plot_dir, f"{file_prefix}AUV_Position.png"), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # Scatter plot of AUV position with depth color coding
@@ -546,7 +546,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
             plt.ylabel('Northing (m)')
             # plt.title('AUV Position with Depth Color Coding')
             plt.grid()
-            plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Color.png"), facecolor='white', bbox_inches='tight')
+            plt.savefig(os.path.join(plot_dir, f"{file_prefix}AUV_Position_Depth_Color.png"), facecolor='white', bbox_inches='tight')
             plt.close()
     else:
         log_message("Skipping position maps - no valid position data available")
@@ -585,7 +585,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
                 plt.ylabel('Northing (m)')
                 # plt.title('AUV Position with Depth Color Coding')
                 plt.grid()
-                plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Depth_Deviation_Color.png"), facecolor='white', bbox_inches='tight')
+                plt.savefig(os.path.join(plot_dir, f"{file_prefix}AUV_Position_Depth_Deviation_Color.png"), facecolor='white', bbox_inches='tight')
                 plt.close()
             else:
                 log_message("Skipping depth deviation analysis - invalid smoothing parameters")
@@ -607,7 +607,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
             plt.ylabel('Northing (m)')
             # plt.title('AUV Position with Intensity Color Coding')
             plt.grid()
-            plt.savefig(os.path.join(plot_dir, "LLS_AUV_Position_Intensity_Color.png"), facecolor='white', bbox_inches='tight')
+            plt.savefig(os.path.join(plot_dir, f"{file_prefix}AUV_Position_Intensity_Color.png"), facecolor='white', bbox_inches='tight')
             plt.close()
         else:
             log_message("Skipping intensity color plot - no valid LLS data available")
@@ -617,7 +617,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     log_message("All summary plots generated successfully")
 
 def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD, RADIUS, 
-                         gui_output_dir=None, xyz_files=None, log_callback=None):
+                         gui_output_dir=None, xyz_files=None, log_callback=None, file_prefix="LLS_"):
     """
     Main function to process LLS data and generate summary plots.
     :param BaseDir: Base directory containing the data.
@@ -749,7 +749,7 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     dfLS.reset_index(drop=True, inplace=True)
     
     # Save the DataFrame to a CSV file - use gui_output_dir if available
-    output_file = os.path.join(output_dir if output_dir else LLSOutputDir, "LLS_Processed_Lls.csv")
+    output_file = os.path.join(output_dir if output_dir else LLSOutputDir, f"{file_prefix}Processed_Lls.csv")
     dfLS.to_csv(output_file, index=False)
     log_message(f"Saved processed LLS data to {output_file}")
 
@@ -796,7 +796,7 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
         dfLS_Files_rows.append(row_dict)
     dfLS_Files = pd.DataFrame(dfLS_Files_rows)
     # Save the DataFrame to a CSV file - use gui_output_dir if available
-    output_file = os.path.join(output_dir if output_dir else LLSOutputDir, "LLS_Processed_Lls_Files.csv")
+    output_file = os.path.join(output_dir if output_dir else LLSOutputDir, f"{file_prefix}Processed_Lls_Files.csv")
     dfLS_Files.to_csv(output_file, index=False)
     log_message(f"Saved processed file summaries to {output_file}")
     
@@ -859,10 +859,10 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     log_message("Creating summary plots...")
     # Use output_dir for LLS plots if available
     lls_plot_dir = output_dir if output_dir else LLSOutputDir
-    Summary_plots(dfLS, lls_plot_dir, DiveNumber, df_Full_Dive, MIN_INTENSITY_THRESHOLD, log_callback)
+    Summary_plots(dfLS, lls_plot_dir, DiveNumber, df_Full_Dive, MIN_INTENSITY_THRESHOLD, log_callback, file_prefix)
     
     # create text file with summary of run time, processing rate, file size, number of files, TotalPoints, perecent DEPTH_FLAG=1 and avg point density
-    summary_file = os.path.join(output_dir if output_dir else LLSOutputDir, f"LLS_Voyis_QuickLook_Summary.txt")  # Added LLS_ prefix
+    summary_file = os.path.join(output_dir if output_dir else LLSOutputDir, f"{file_prefix}Voyis_QuickLook_Summary.txt")
     with open(summary_file, 'w') as f:
         f.write(f"Total Run Time: {Total_Run_Time}\n")
         f.write(f"Processing rate: {proces_rate:.2f} MB/s\n")
@@ -885,4 +885,5 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
 
     log_message(f"Summary written to {summary_file}")
     log_message("LLS processing complete!")
+
 

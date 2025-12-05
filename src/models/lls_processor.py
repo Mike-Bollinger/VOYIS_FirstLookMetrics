@@ -49,7 +49,7 @@ class LLSProcessor:
             self.progress_callback(value, message)
     
     def process_lls_data(self, lls_folder: str, phins_nav_file: str, 
-                        output_folder: str) -> bool:
+                        output_folder: str, file_prefix: str = "LLS_") -> bool:
         """
         Process LLS data using the Ship_LLS_Read_Plot_V2 functionality
         
@@ -97,7 +97,8 @@ class LLSProcessor:
                 RADIUS=self.radius,
                 gui_output_dir=output_folder,  # Pass the GUI output directory
                 xyz_files=None,  # Let it find all LLS_*.xyz files
-                log_callback=self.log_message  # Pass the log callback
+                log_callback=self.log_message,  # Pass the log callback
+                file_prefix=file_prefix  # Pass the file prefix for output naming
             )
             
             self.update_progress(90, "Copying results to output folder...")
