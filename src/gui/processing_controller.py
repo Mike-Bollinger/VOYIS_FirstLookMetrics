@@ -382,7 +382,7 @@ class ProcessingController:
                                     break
                         
                         # Use dive prefix if available
-                        dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
+                        dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "Image_"
                         
                         if hasattr(self.metrics, 'create_image_metrics_csv_parallel'):
                             csv_path = self.metrics.create_image_metrics_csv_parallel(
@@ -404,6 +404,14 @@ class ProcessingController:
                         
                         if csv_path:
                             self.log_message(f"✓ Created Image_Metrics.csv: {os.path.basename(csv_path)}")
+                            
+                            # Check for old non-prefixed CSV and warn user
+                            if dive_prefix != "Image_":
+                                old_csv = os.path.join(output_folder, "Image_Metrics.csv")
+                                if os.path.exists(old_csv) and old_csv != csv_path:
+                                    self.log_message(f"⚠ Found old non-prefixed CSV: Image_Metrics.csv")
+                                    self.log_message(f"   Using prefixed version: {os.path.basename(csv_path)}")
+                                    self.log_message(f"   You can safely delete the old Image_Metrics.csv file")
                         else:
                             self.log_message("⚠ Failed to create Image_Metrics.csv")
                         

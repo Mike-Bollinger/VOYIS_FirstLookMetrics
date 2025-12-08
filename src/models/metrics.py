@@ -1170,24 +1170,12 @@ class Metrics:
                     'horizontal_overlap': '',
                     'overall_overlap': '',
                     
-                    # Visibility analyzer columns
-                    'visibility_category': '',
-                    'visibility_score': '',
+                    # Visibility analyzer columns (keeping only the current version)
+                    'visibility': '',
                     'visibility_confidence': '',
                     
-                    # Highlight selector columns
-                    'contrast_score': '',
-                    'texture_score': '',
-                    'color_variance': '',
-                    'entropy_score': '',
-                    'highlight_score': '',
-                    'is_highlight': '',
-                    
-                    # Quality metrics
-                    'blur_score': '',
-                    'brightness_score': '',
-                    'color_balance': '',
-                    'sharpness_score': ''
+                    # Highlight selector column
+                    'is_highlight': ''
                 }
                 
                 csv_data.append(row_data)
