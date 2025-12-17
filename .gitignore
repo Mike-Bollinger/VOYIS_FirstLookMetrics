@@ -14,3 +14,17 @@ tests/*.tif
 *.tif
 tests/*.xyz
 *.xyz
+src/gui/__pycache__/__init__.cpython-39.pyc
+src/gui/__pycache__/app_window.cpython-39.pyc
+src/gui/__pycache__/processing_controller.cpython-39.pyc
+src/gui/__pycache__/ui_components.cpython-39.pyc
+src/models/__pycache__/__init__.cpython-39.pyc
+src/models/__pycache__/altitude_map.cpython-39.pyc
+src/models/__pycache__/footprint_map.cpython-39.pyc
+src/models/__pycache__/highlight_selector.cpython-39.pyc
+src/models/__pycache__/metrics.cpython-39.pyc
+src/models/__pycache__/nav_merger.cpython-39.pyc
+src/models/__pycache__/nav_plotter.cpython-39.pyc
+src/models/__pycache__/visibility_analyzer.cpython-39.pyc
+src/utils/__pycache__/__init__.cpython-39.pyc
+src/utils/__pycache__/file_utils.cpython-39.pyc

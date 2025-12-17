@@ -1334,6 +1334,46 @@ class ProcessingController:
         original_paths = self.save_current_paths()
         
         try:
+            # Extract dive prefixes from ALL input paths for this batch job
+            # This must be done BEFORE any processing so all modules use correct prefixes
+            self.log_message(f"Job {job_num}: Extracting dive prefixes from input paths...")
+            
+            # Extract from image input path
+            if input_folder:
+                self.dive_prefix_image = get_output_prefix(input_folder, "Image")
+                dive_num = extract_dive_number(input_folder)
+                if dive_num:
+                    self.log_message(f"  → Image prefix: {self.dive_prefix_image}")
+                else:
+                    self.dive_prefix_image = "Image_"
+                    self.log_message(f"  → Image prefix defaulted to: {self.dive_prefix_image}")
+            else:
+                self.dive_prefix_image = "Image_"
+            
+            # Extract from navigation directory path
+            if nav_directory:
+                self.dive_prefix_nav = get_output_prefix(nav_directory, "Nav")
+                dive_num = extract_dive_number(nav_directory)
+                if dive_num:
+                    self.log_message(f"  → Nav prefix: {self.dive_prefix_nav}")
+                else:
+                    self.dive_prefix_nav = "Nav_"
+                    self.log_message(f"  → Nav prefix defaulted to: {self.dive_prefix_nav}")
+            else:
+                self.dive_prefix_nav = "Nav_"
+            
+            # Extract from LLS input path
+            if lls_folder:
+                self.dive_prefix_lls = get_output_prefix(lls_folder, "LLS")
+                dive_num = extract_dive_number(lls_folder)
+                if dive_num:
+                    self.log_message(f"  → LLS prefix: {self.dive_prefix_lls}")
+                else:
+                    self.dive_prefix_lls = "LLS_"
+                    self.log_message(f"  → LLS prefix defaulted to: {self.dive_prefix_lls}")
+            else:
+                self.dive_prefix_lls = "LLS_"
+            
             # Set paths for this job
             if imagery_selected:
                 self.input_path.set(input_folder if input_folder else '')
