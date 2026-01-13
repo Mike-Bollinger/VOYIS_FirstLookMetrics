@@ -98,6 +98,16 @@ The VOYIS First Look Metrics application is a comprehensive post-mission analysi
   - Configurable processing options with intelligent defaults
   - Improved batch processing interface with save/restore capabilities
 
+### Utility Tools
+- **Standalone Plot Creator** (New in v1.6.0)
+  - Regenerate plots from existing Image_Metrics.csv files without re-running analysis
+  - GUI-based interface for selecting parent folders and CSV files
+  - Recursive search for all DIVE*_Image_Metrics.csv files
+  - Batch processing support for multiple CSV files
+  - Currently supports: Visibility Distribution Analysis plots
+  - Extensible design for future plot types
+  - See `src/utils/STANDALONE_PLOT_CREATOR_README.md` for detailed usage instructions
+
 - **Batch Processing**
   - Process multiple dive datasets simultaneously with improved reliability
   - Unified navigation file path handling for both LLS and navigation modules
@@ -188,6 +198,29 @@ The VOYIS First Look Metrics application is a comprehensive post-mission analysi
   - Supports mixed processing configurations (e.g., some dives with navigation, others with LLS only)
   - Save and restore batch configurations for repeated processing workflows  
   - Unified navigation file path handling across all modules
+
+### Utility Tools Usage
+
+#### Standalone Plot Creator
+Regenerate plots from existing Image_Metrics.csv files without re-running the full analysis:
+
+**Windows:**
+- Double-click `src/utils/launch_standalone_plot_creator.bat`
+- Or right-click `src/utils/launch_standalone_plot_creator.ps1` and select "Run with PowerShell"
+
+**Command Line:**
+```
+python -m src.utils.standalone_plot_creator
+```
+
+**Workflow:**
+1. Select parent folder containing dive data
+2. Click "Search for CSV Files" to find all Image_Metrics.csv files
+3. Select which CSV files to process (use checkboxes)
+4. Choose plot types to generate
+5. Click "Generate Plots"
+
+See `src/utils/STANDALONE_PLOT_CREATOR_README.md` for detailed documentation.
   - Enhanced error recovery and detailed logging for each dive dataset
   - See `BATCH_CSV_FORMAT.md` for detailed CSV format specifications
 

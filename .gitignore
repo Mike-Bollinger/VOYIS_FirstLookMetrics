@@ -28,3 +28,16 @@ src/models/__pycache__/nav_plotter.cpython-39.pyc
 src/models/__pycache__/visibility_analyzer.cpython-39.pyc
 src/utils/__pycache__/__init__.cpython-39.pyc
 src/utils/__pycache__/file_utils.cpython-39.pyc
+src/gui/__pycache__/__init__.cpython-313.pyc
+src/gui/__pycache__/app_window.cpython-313.pyc
+src/gui/__pycache__/processing_controller.cpython-313.pyc
+src/gui/__pycache__/ui_components.cpython-313.pyc
+src/models/__pycache__/__init__.cpython-313.pyc
+src/models/__pycache__/altitude_map.cpython-313.pyc
+src/models/__pycache__/footprint_map.cpython-313.pyc
+src/models/__pycache__/highlight_selector.cpython-313.pyc
+src/models/__pycache__/metrics.cpython-313.pyc
+src/models/__pycache__/nav_plotter.cpython-313.pyc
+src/models/__pycache__/visibility_analyzer.cpython-313.pyc
+src/utils/__pycache__/__init__.cpython-313.pyc
+src/utils/__pycache__/file_utils.cpython-313.pyc

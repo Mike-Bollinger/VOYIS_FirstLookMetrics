@@ -66,7 +66,10 @@ class Metrics:
         self.raw_size = 0
         self.other_count = 0
         self.other_size = 0
-        self.gps_data = []
+        
+        # Only reset GPS data if we're extracting it (preserve existing data otherwise)
+        if extract_gps:
+            self.gps_data = []
         
         # Reset processing type counters
         self.auv_processed_count = 0

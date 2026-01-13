@@ -101,6 +101,21 @@ class ProcessingController:
             
             return True
         return False
+    
+    def play_completion_sound(self):
+        """Play a sound when processing completes"""
+        try:
+            import winsound
+            sound_file = os.path.join(os.path.dirname(__file__), '..', 'utils', 'sounds', 'beer_open.wav')
+            if os.path.exists(sound_file):
+                # Play the custom WAV file asynchronously
+                winsound.PlaySound(sound_file, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            else:
+                # Use system sound as fallback if custom sound not found
+                winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        except Exception as e:
+            # Silently fail if sound can't play
+            pass
 
     def process_images(self):
         """Main function to process images based on selected options"""
@@ -719,13 +734,19 @@ class ProcessingController:
                 return
             
             try:
-                # Call the correct method that actually processes the directory
-                extract_gps = any([
-                    self.location_map_var.get(), 
-                    self.histogram_var.get(),
-                    self.footprint_map_var.get(), 
-                    self.visibility_analyzer_var.get()
-                ])
+                # OPTIMIZATION: Skip GPS extraction if we already have it from CSV creation
+                # This prevents redundant EXIF reading of 70k+ images
+                already_have_gps = hasattr(self.metrics, 'gps_data') and len(self.metrics.gps_data) > 0
+                
+                # Only extract GPS if we need it AND don't already have it
+                extract_gps = False
+                if not already_have_gps:
+                    extract_gps = any([
+                        self.location_map_var.get(), 
+                        self.histogram_var.get(),
+                        self.footprint_map_var.get(), 
+                        self.visibility_analyzer_var.get()
+                    ])
                 
                 processed_files, results = self.metrics.analyze_directory(
                     input_folder,
