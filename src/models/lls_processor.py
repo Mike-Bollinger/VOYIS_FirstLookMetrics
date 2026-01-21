@@ -22,16 +22,19 @@ class LLSProcessor:
     """Wrapper class for LLS processing functionality"""
     
     def __init__(self, log_callback: Optional[Callable] = None, 
-                 progress_callback: Optional[Callable] = None):
+                 progress_callback: Optional[Callable] = None,
+                 stop_check_callback: Optional[Callable] = None):
         """
         Initialize LLS processor
         
         Args:
             log_callback: Function to call for logging messages
             progress_callback: Function to call for progress updates
+            stop_check_callback: Function to call to check if processing should stop
         """
         self.log_callback = log_callback or print
         self.progress_callback = progress_callback or (lambda x, msg: None)
+        self.stop_check_callback = stop_check_callback or (lambda: False)
         
         # Default processing parameters
         self.min_intensity_threshold = 100
@@ -49,7 +52,8 @@ class LLSProcessor:
             self.progress_callback(value, message)
     
     def process_lls_data(self, lls_folder: str, phins_nav_file: str, 
-                        output_folder: str, file_prefix: str = "LLS_") -> bool:
+                        output_folder: str, file_prefix: str = "LLS_", 
+                        use_inplace: bool = False) -> bool:
         """
         Process LLS data using the Ship_LLS_Read_Plot_V2 functionality
         
@@ -57,6 +61,8 @@ class LLSProcessor:
             lls_folder: Path to folder containing LLS .xyz files
             phins_nav_file: Path to Phins navigation file (.bin, .txt, or .csv)
             output_folder: Output directory for processed results
+            file_prefix: Prefix for output files
+            use_inplace: If True, process files in-place without copying to temp
             
         Returns:
             bool: True if processing successful, False otherwise
@@ -84,32 +90,59 @@ class LLSProcessor:
             self.log_message(f"Found {len(xyz_files)} LLS files to process")
             self.update_progress(10, "Setting up LLS processing...")
             
-            # Create temporary directory structure that matches expected format
-            temp_base_dir = self.setup_temp_directory(lls_folder, phins_nav_file, output_folder)
+            # Create directory structure (temp or in-place based on mode)
+            if use_inplace:
+                self.log_message("Using in-place processing mode (no file copying)")
+                temp_base_dir = self.setup_inplace_directory(lls_folder, phins_nav_file, output_folder)
+            else:
+                self.log_message("Using temp directory mode (files will be copied)")
+                temp_base_dir = self.setup_temp_directory(lls_folder, phins_nav_file, output_folder)
             
-            self.update_progress(20, "Processing LLS data...")
-            
-            # Call the original processing function with log callback
-            Step01_Find_Good_Data(
-                BaseDir=temp_base_dir,
-                MIN_INTENSITY_THRESHOLD=self.min_intensity_threshold,
-                BAD_POINT_THRESHOLD=self.bad_point_threshold,
-                RADIUS=self.radius,
-                gui_output_dir=output_folder,  # Pass the GUI output directory
-                xyz_files=None,  # Let it find all LLS_*.xyz files
-                log_callback=self.log_message,  # Pass the log callback
-                file_prefix=file_prefix  # Pass the file prefix for output naming
-            )
-            
-            self.update_progress(90, "Copying results to output folder...")
-            
-            # Copy results to final output location
-            self.copy_results_to_output(temp_base_dir, output_folder)
-            
-            self.update_progress(100, "LLS processing complete")
-            self.log_message("LLS data processing completed successfully")
-            
-            return True
+            try:
+                self.update_progress(20, "Processing LLS data...")
+                
+                # Call the original processing function with log callback
+                Step01_Find_Good_Data(
+                    BaseDir=temp_base_dir,
+                    MIN_INTENSITY_THRESHOLD=self.min_intensity_threshold,
+                    BAD_POINT_THRESHOLD=self.bad_point_threshold,
+                    RADIUS=self.radius,
+                    gui_output_dir=output_folder,  # Pass the GUI output directory
+                    xyz_files=None,  # Let it find all LLS_*.xyz files
+                    log_callback=self.log_message,  # Pass the log callback
+                    file_prefix=file_prefix,  # Pass the file prefix for output naming
+                    stop_check_callback=self.stop_check_callback  # Pass stop check callback
+                )
+                
+                self.update_progress(90, "Copying results to output folder...")
+                
+                # Copy results to final output location
+                self.copy_results_to_output(temp_base_dir, output_folder)
+                
+                self.update_progress(100, "LLS processing complete")
+                self.log_message("LLS data processing completed successfully")
+                
+                return True
+            finally:
+                # Clean up temp directory (only if not in-place mode)
+                if not use_inplace and os.path.exists(temp_base_dir):
+                    self.log_message("Cleaning up temporary files...")
+                    try:
+                        shutil.rmtree(temp_base_dir)
+                        self.log_message("✓ Temporary directory cleaned up")
+                    except Exception as cleanup_error:
+                        self.log_message(f"Warning: Could not clean up temp directory: {cleanup_error}")
+                elif use_inplace:
+                    # For in-place mode, only clean up the temp_lls_processing directory we created
+                    if os.path.exists(temp_base_dir) and 'temp_lls_processing' in temp_base_dir:
+                        self.log_message("Cleaning up temporary processing directory...")
+                        try:
+                            shutil.rmtree(temp_base_dir)
+                            self.log_message("✓ Temporary processing directory cleaned up (source files preserved)")
+                        except Exception as cleanup_error:
+                            self.log_message(f"Warning: Could not clean up temp directory: {cleanup_error}")
+                    else:
+                        self.log_message("✓ In-place processing complete (source files preserved)")
             
         except Exception as e:
             self.log_message(f"Error during LLS processing: {str(e)}")
@@ -165,6 +198,138 @@ class LLSProcessor:
             shutil.copy2(phins_nav_file, dst)
         
         return temp_dir
+    
+    def setup_inplace_directory(self, lls_folder: str, phins_nav_file: str, 
+                               output_folder: str) -> str:
+        """
+        Set up in-place directory structure for processing without copying LLS files
+        
+        Args:
+            lls_folder: Source LLS folder (will be used directly)
+            phins_nav_file: Phins navigation file
+            output_folder: Output folder
+            
+        Returns:
+            str: Path to processing base directory (parent of LLS folder)
+        """
+        # NEVER rename or move the original LLS folder!
+        # Instead, create a temp structure that references it
+        
+        # Get the parent directory of the LLS folder (e.g., DIVE001_Stokey)
+        parent_dir = os.path.dirname(lls_folder)
+        lls_folder_name = os.path.basename(lls_folder)
+        
+        # Create a temp working directory in the parent (e.g., Image_LLS/DIVE001/temp)
+        temp_base_dir = os.path.join(parent_dir, 'temp_lls_processing')
+        os.makedirs(temp_base_dir, exist_ok=True)
+        self.log_message(f"Created temporary processing directory: {temp_base_dir}")
+        
+        # Create LLS subdirectory with symlink/junction to original folder
+        lls_dir = os.path.join(temp_base_dir, 'LLS')
+        
+        # Remove existing if present
+        if os.path.exists(lls_dir):
+            # On Windows, junctions appear as directories but need special handling
+            # Check if it's a reparse point (junction/symlink)
+            if sys.platform == 'win32':
+                import stat
+                try:
+                    # Try to detect if it's a junction by checking FILE_ATTRIBUTE_REPARSE_POINT
+                    attrs = os.stat(lls_dir, follow_symlinks=False)
+                    is_junction = bool(attrs.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+                except (AttributeError, OSError):
+                    # Fallback: try to remove as junction first
+                    is_junction = True
+                
+                if is_junction:
+                    # Use os.rmdir for junctions on Windows (not shutil.rmtree)
+                    try:
+                        os.rmdir(lls_dir)
+                    except:
+                        os.unlink(lls_dir)
+                else:
+                    shutil.rmtree(lls_dir)
+            elif os.path.islink(lls_dir):
+                os.unlink(lls_dir)
+            else:
+                shutil.rmtree(lls_dir)
+        
+        # Try to create junction/symlink to avoid copying
+        junction_created = False
+        try:
+            if sys.platform == 'win32':
+                # Use junction on Windows - this doesn't require admin rights
+                # IMPORTANT: Use quoted paths to handle spaces and special chars
+                import subprocess
+                result = subprocess.run(
+                    f'mklink /J "{lls_dir}" "{lls_folder}"',
+                    shell=True,
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    junction_created = True
+                    self.log_message(f"Created directory junction: {lls_dir} -> {lls_folder}")
+                else:
+                    self.log_message(f"Junction creation failed: {result.stderr}")
+            else:
+                # Use symlink on Unix
+                os.symlink(lls_folder, lls_dir, target_is_directory=True)
+                junction_created = True
+                self.log_message(f"Created symlink: {lls_dir} -> {lls_folder}")
+        except Exception as e:
+            self.log_message(f"Could not create junction/symlink: {e}")
+        
+        # If junction/symlink failed, create LLS directory and create symlinks for each file
+        if not junction_created:
+            self.log_message("Creating file references instead of directory junction...")
+            os.makedirs(lls_dir, exist_ok=True)
+            
+            # Create symlinks/junctions for individual files
+            for filename in os.listdir(lls_folder):
+                if filename.endswith('.xyz'):
+                    src_file = os.path.join(lls_folder, filename)
+                    dst_file = os.path.join(lls_dir, filename)
+                    try:
+                        if sys.platform == 'win32':
+                            # On Windows, use hardlink for files
+                            os.link(src_file, dst_file)
+                        else:
+                            os.symlink(src_file, dst_file)
+                    except Exception as link_error:
+                        self.log_message(f"Warning: Could not link {filename}, will process from original location")
+            
+            # If even file linking failed, just reference the original folder
+            if not any(f.endswith('.xyz') for f in os.listdir(lls_dir)):
+                self.log_message("File linking failed - removing temp LLS dir and using original location")
+                shutil.rmtree(lls_dir)
+                # Create a junction that points to the original folder one more time with different approach
+                # Or just accept that we'll reference parent_dir and the LLS subfolder path
+                # Actually, let's just recreate and point to parent
+                return parent_dir  # Return parent, LLS subfolder already exists there
+        
+        # Create Vehicle_Data directory in temp base
+        vehicle_data_dir = os.path.join(temp_base_dir, 'Vehicle_Data')
+        os.makedirs(vehicle_data_dir, exist_ok=True)
+        
+        # Handle Phins navigation file
+        self.log_message("Setting up navigation data...")
+        nav_file_name = os.path.basename(phins_nav_file)
+        nav_file_ext = os.path.splitext(nav_file_name)[1].lower()
+        
+        if nav_file_ext == '.txt':
+            # For text files, convert them
+            self.process_text_nav_file(phins_nav_file, vehicle_data_dir)
+        elif nav_file_ext == '.bin':
+            # Copy binary file to vehicle data directory
+            dst = os.path.join(vehicle_data_dir, nav_file_name)
+            shutil.copy2(phins_nav_file, dst)
+        else:
+            # For other formats, copy to vehicle data directory
+            dst = os.path.join(vehicle_data_dir, nav_file_name)
+            shutil.copy2(phins_nav_file, dst)
+        
+        return temp_base_dir
     
     def process_text_nav_file(self, nav_file_path: str, vehicle_data_dir: str):
         """
@@ -300,7 +465,7 @@ class LLSProcessor:
                 'Pitch': df['Pitch'],
                 'Roll': df['Roll']
             })
-            attitude_file = os.path.join(vehicle_data_dir, 'Atitude.csv')
+            attitude_file = os.path.join(vehicle_data_dir, 'ATITUD.csv')
             attitude_df.to_csv(attitude_file, index=False)
             self.log_message(f"Created {attitude_file} with {len(attitude_df)} records")
             
@@ -345,7 +510,7 @@ class LLSProcessor:
             
             speed_df = pd.DataFrame({
                 'Date_Time': df['DateTime'].dt.strftime(datetime_format),
-                'Speed': velocities
+                'Velocity': velocities  # Changed from 'Speed' to 'Velocity' to match binary phins data
             })
             speed_file = os.path.join(vehicle_data_dir, 'SPEED_.csv')
             speed_df.to_csv(speed_file, index=False)

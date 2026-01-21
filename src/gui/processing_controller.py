@@ -624,14 +624,21 @@ class ProcessingController:
             # Use dive prefix if available, otherwise use default
             dive_prefix = self.dive_prefix_lls if hasattr(self, 'dive_prefix_lls') and self.dive_prefix_lls else "lls_"
             
+            # Get processing mode from GUI
+            processing_mode = getattr(self, 'lls_processing_mode', None)
+            use_inplace = processing_mode.get() == 'inplace' if processing_mode else False
+            
             lls_processor = LLSProcessor(
                 log_callback=self.log_message,
                 progress_callback=lambda value, msg: self.update_progress(
                     progress_offset + (value * progress_scale / 100), msg
-                )
+                ),
+                stop_check_callback=self.check_stop_flag
             )
             
-            success = lls_processor.process_lls_data(lls_folder, nav_file, output_folder, file_prefix=dive_prefix)
+            success = lls_processor.process_lls_data(lls_folder, nav_file, output_folder, 
+                                                     file_prefix=dive_prefix, 
+                                                     use_inplace=use_inplace)
             
             if success:
                 self.log_message("✓ LLS data processing completed successfully")

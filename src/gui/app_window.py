@@ -63,6 +63,9 @@ class AppWindow(UIComponents, ProcessingController):
         self.lls_path = tk.StringVar()
         self.phins_nav_path = tk.StringVar()
         
+        # LLS processing mode: 'copy' or 'inplace'
+        self.lls_processing_mode = tk.StringVar(value='copy')
+        
         # Navigation processing paths (for plotting - text files with heave data)
         self.nav_processing_var = tk.BooleanVar(value=True)
         self.nav_plot_file_path = tk.StringVar()  # Primary NAV_STATE file (backward compatibility)
@@ -73,6 +76,9 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Set navigation mode to directory only
         self.nav_merge_mode = tk.StringVar(value='directory')
+        
+        # LLS processing mode
+        self.lls_processing_var = tk.BooleanVar(value=True)
         
         # Batch processing
         self.batch_mode = False
@@ -385,14 +391,37 @@ class AppWindow(UIComponents, ProcessingController):
         # LLS Processing Section
         lls_section = ttk.LabelFrame(self.functions_frame, text="Laser Data Processing", padding="5")
         lls_section.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        lls_section.columnconfigure(0, weight=1)
         
         self.lls_processing_checkbox = ttk.Checkbutton(
             lls_section, 
             text="Process LLS Data", 
             variable=self.lls_processing_var,
-            command=self.update_all_checkbox
+            command=self.toggle_lls_options
         )
-        self.lls_processing_checkbox.grid(row=0, column=0, sticky='w')
+        self.lls_processing_checkbox.grid(row=0, column=0, sticky='w', columnspan=3)
+        
+        # Storage mode selection (radio buttons)
+        self.lls_storage_frame = ttk.Frame(lls_section)
+        self.lls_storage_frame.grid(row=1, column=0, sticky='w', padx=(20, 0), pady=(5, 0), columnspan=3)
+        
+        ttk.Label(self.lls_storage_frame, text="Data Storage:", font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.lls_copy_radio = ttk.Radiobutton(
+            self.lls_storage_frame,
+            text="Copy to Temp (safer, requires disk space)",
+            variable=self.lls_processing_mode,
+            value='copy'
+        )
+        self.lls_copy_radio.pack(side=tk.LEFT, padx=(0, 15))
+        
+        self.lls_inplace_radio = ttk.Radiobutton(
+            self.lls_storage_frame,
+            text="Process In-Place (saves disk space)",
+            variable=self.lls_processing_mode,
+            value='inplace'
+        )
+        self.lls_inplace_radio.pack(side=tk.LEFT)
         
         # Imagery Processing Section
         imagery_section = ttk.LabelFrame(self.functions_frame, text="Imagery Processing", padding="5")
@@ -723,6 +752,18 @@ class AppWindow(UIComponents, ProcessingController):
             self.all_var.set(False)
         
         self.toggle_visibility_options()
+
+    def toggle_lls_options(self):
+        """Show/hide LLS storage options based on checkbox state"""
+        if self.lls_processing_var.get():
+            # Show the storage options
+            self.lls_storage_frame.grid()
+        else:
+            # Hide the storage options
+            self.lls_storage_frame.grid_remove()
+        
+        # Also call update_all_checkbox to maintain the "All" checkbox behavior
+        self.update_all_checkbox()
 
     def toggle_visibility_options(self):
         """Show or hide visibility model options based on checkbox state"""

@@ -388,7 +388,7 @@ def basic_analysis(Dir, Avg_dive_time):
     print(f"PHINS data files checked in {VehicleDir}")
     Avg_dive_time = pd.Timestamp(Avg_dive_time).tz_localize('UTC')
     print(f"Avg_dive_time: {Avg_dive_time}")
-    StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = NAV_surface_offset(VehicleDir, VehicleOutputDir, Avg_dive_time)
+    StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = NAV_surface_offset(VehicleDir, VehicleOutputDir, Avg_dive_time, '')
     print(f"StartDive: {StartDive}, EndDive: {EndDive}, GPS_OffsetG: {GPS_OffsetG}, GPS_OffsetP: {GPS_OffsetP}")
     Var_plot(VehicleDir,"ATITUD.csv", 'Roll', StartDive, EndDive)
     Var_plot(VehicleDir,"ATITUD.csv", 'Pitch', StartDive, EndDive)
@@ -432,10 +432,10 @@ def phins_check(Dir, output_dir=None):
             data_frames = read_unique_identifiers(file_path)
 
             # outliers removal
-            outliers=outlier_check(data_frames['DEPIN_']['Depth'], data_frames['DEPIN_']['Date_Time'],15, 20, 'Depth',VehicleOutputDir)
+            outliers=outlier_check(data_frames['DEPIN_']['Depth'], data_frames['DEPIN_']['Date_Time'],15, 20, 'Depth',VehicleOutputDir, '')
             data_frames['DEPIN_'] = data_frames['DEPIN_'][~outliers]
 
-            outliers=outlier_check(data_frames['LOGDVL']['DVL_Distance_2btm'], data_frames['LOGDVL']['Date_Time'],15, 20, 'DVL_Distance_2btm',VehicleOutputDir)
+            outliers=outlier_check(data_frames['LOGDVL']['DVL_Distance_2btm'], data_frames['LOGDVL']['Date_Time'],15, 20, 'DVL_Distance_2btm',VehicleOutputDir, '')
             data_frames['LOGDVL'] = data_frames['LOGDVL'][~outliers]
 
             for key, df in data_frames.items():
@@ -460,22 +460,44 @@ def add_IMU_NAV(df, Dir, TimeOffset=0):
         raise ValueError("DataFrame must contain a 'Date_Time' column.")
 
     try:
-        df_Atitude=pd.read_csv(Dir+"\\Atitude.csv")  # Fixed filename
+        df_Atitude=pd.read_csv(Dir+"\\ATITUD.csv")  # Attitude data file
         # Roll,Pitch,Time_REF,Date_Time
         df_Atitude['Date_Time'] = pd.to_datetime(df_Atitude['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
         df_Atitude['Date_Time'] = df_Atitude['Date_Time'].dt.tz_localize('UTC')
         df_Atitude['Date_Time'] = df_Atitude['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
         df_Atitude = df_Atitude.dropna(subset=['Date_Time'])
 
-        df_HEHDT=pd.read_csv(Dir+"\\HEHDT_.csv")  # Fixed filename
+        # Try both HEHDT.csv (binary phins) and HEHDT_.csv (text nav file)
+        hehdt_file = None
+        if os.path.exists(Dir+"\\HEHDT.csv"):
+            hehdt_file = Dir+"\\HEHDT.csv"
+        elif os.path.exists(Dir+"\\HEHDT_.csv"):
+            hehdt_file = Dir+"\\HEHDT_.csv"
+        else:
+            raise FileNotFoundError(f"Could not find HEHDT.csv or HEHDT_.csv in {Dir}")
+        
+        df_HEHDT=pd.read_csv(hehdt_file)
         # Heading,Time_REF,Date_Time
         df_HEHDT['Date_Time'] = pd.to_datetime(df_HEHDT['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
         df_HEHDT['Date_Time'] = df_HEHDT['Date_Time'].dt.tz_localize('UTC')
         df_HEHDT['Date_Time'] = df_HEHDT['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
         df_HEHDT = df_HEHDT.dropna(subset=['Date_Time'])
 
-        df_UTMWGS=pd.read_csv(Dir+"\\UTMWGS84.csv")  # Fixed filename
-        # AUV_Easting,AUV_Northing columns (fixed from lls_processor)
+        # Try both UTMWGS.csv (binary phins) and UTMWGS84.csv (text nav file)
+        utmwgs_file = None
+        if os.path.exists(Dir+"\\UTMWGS84.csv"):
+            utmwgs_file = Dir+"\\UTMWGS84.csv"
+        elif os.path.exists(Dir+"\\UTMWGS.csv"):
+            utmwgs_file = Dir+"\\UTMWGS.csv"
+        else:
+            raise FileNotFoundError(f"Could not find UTMWGS.csv or UTMWGS84.csv in {Dir}")
+        
+        df_UTMWGS=pd.read_csv(utmwgs_file)
+        # AUV_Easting,AUV_Northing columns (from text nav) or Easting,Northing (from binary)
+        # Check which columns exist and rename if needed
+        if 'Easting' in df_UTMWGS.columns and 'AUV_Easting' not in df_UTMWGS.columns:
+            df_UTMWGS = df_UTMWGS.rename(columns={'Easting': 'AUV_Easting', 'Northing': 'AUV_Northing'})
+        
         df_UTMWGS['Date_Time'] = pd.to_datetime(df_UTMWGS['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
         df_UTMWGS['Date_Time'] = df_UTMWGS['Date_Time'].dt.tz_localize('UTC')
         df_UTMWGS['Date_Time'] = df_UTMWGS['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
@@ -497,6 +519,10 @@ def add_IMU_NAV(df, Dir, TimeOffset=0):
 
         df_SPEED_ = pd.read_csv(Dir+"\\SPEED_.csv")
         # EastSpeed,NorthSpeed,UpSpeed,Velocity,Time_REF,Date_Time
+        # Handle both 'Velocity' (from binary) and 'Speed' (from old text processing)
+        if 'Speed' in df_SPEED_.columns and 'Velocity' not in df_SPEED_.columns:
+            df_SPEED_ = df_SPEED_.rename(columns={'Speed': 'Velocity'})
+        
         df_SPEED_['Date_Time'] = pd.to_datetime(df_SPEED_['Date_Time'], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
         df_SPEED_['Date_Time'] = df_SPEED_['Date_Time'].dt.tz_localize('UTC')
         df_SPEED_['Date_Time'] = df_SPEED_['Date_Time'] + pd.Timedelta(seconds=TimeOffset)
@@ -544,7 +570,7 @@ def add_IMU_NAV(df, Dir, TimeOffset=0):
         df_DEPIN = df_DEPIN.sort_values('Timestamp')
         df_LOGDVL = df_LOGDVL.dropna(subset=['Timestamp', 'DVL_Distance_2btm'])
         df_LOGDVL = df_LOGDVL.sort_values('Timestamp')
-        df_SPEED_ = df_SPEED_.dropna(subset=['Timestamp', 'Speed'])  # Fixed column name
+        df_SPEED_ = df_SPEED_.dropna(subset=['Timestamp', 'Velocity'])  # Use Velocity column
         df_SPEED_ = df_SPEED_.sort_values('Timestamp')
         df_POSITI = df_POSITI.dropna(subset=['Timestamp', 'Latitude', 'Longitude'])
         df_POSITI = df_POSITI.sort_values('Timestamp')
@@ -565,9 +591,11 @@ def add_IMU_NAV(df, Dir, TimeOffset=0):
         if len(df_UTMWGS) > 0:
             df['AUV_Northing'] = np.interp(df['Timestamp'], df_UTMWGS['Timestamp'], df_UTMWGS['AUV_Northing'])
             df['AUV_Easting'] = np.interp(df['Timestamp'], df_UTMWGS['Timestamp'], df_UTMWGS['AUV_Easting'])
+            print(f"Successfully interpolated {len(df)} Easting/Northing values from {len(df_UTMWGS)} UTMWGS records")
         else:
             df['AUV_Northing'] = 0.0
             df['AUV_Easting'] = 0.0
+            print(f"WARNING: No valid UTMWGS data found - setting all Easting/Northing to 0")
             
         if len(df_DEPIN) > 0:
             df['AUV_Depth'] = -np.interp(df['Timestamp'], df_DEPIN['Timestamp'], df_DEPIN['Depth'])
@@ -582,7 +610,7 @@ def add_IMU_NAV(df, Dir, TimeOffset=0):
         df['AUV_WaterDepth'] = df['AUV_Depth'] - df['AUV_Altitude'] # depth negative, altitude positive, water depth is negative
         
         if len(df_SPEED_) > 0:
-            df['AUV_Velocity'] = np.interp(df['Timestamp'], df_SPEED_['Timestamp'], df_SPEED_['Speed'])
+            df['AUV_Velocity'] = np.interp(df['Timestamp'], df_SPEED_['Timestamp'], df_SPEED_['Velocity'])  # Use Velocity column
         else:
             df['AUV_Velocity'] = 1.0  # Default velocity
             
@@ -637,12 +665,13 @@ def haversine(lat1, lon1, lat2, lon2):
     # Distance
     return R * c
 
-def NAV_surface_offset(Dir, plot_dir, dive_time):
+def NAV_surface_offset(Dir, plot_dir, dive_time, file_prefix=''):
     """
     Calculate the NAV surface offset and plot the results.
     :param data_PHINS: Dictionary of DataFrames containing Phins data.
     :param Dir: Directory to save the plots.
     :param dive_time: mid point of the dive used to find the start and end of the dive.
+    :param file_prefix: Prefix for output files (e.g., 'DIVE001_LLS_')
     """
     phins_check(Dir)
 
@@ -770,7 +799,7 @@ def NAV_surface_offset(Dir, plot_dir, dive_time):
         plt.xlim(0, 30)
         plt.xlabel('Time Since Surface (min)')
         plt.ylabel('DVL Distance to Bottom (m)')
-        plt.savefig(os.path.join(plot_dir, 'IMU_Position_to_GPS_Post_Dive.png'))
+        plt.savefig(os.path.join(plot_dir, f'{file_prefix}IMU_Position_to_GPS_Post_Dive.png'))
         plt.close()
 
         # remove outliers Distance_m
@@ -788,7 +817,7 @@ def NAV_surface_offset(Dir, plot_dir, dive_time):
         # plt.ylim(0, 25)
         plt.xlabel('Time Since Surface (min)')
         plt.ylabel('Distance (m)')
-        plt.savefig(os.path.join(plot_dir, 'Report_plot_IMU_Position_to_GPS_Post_Dive.png'))
+        plt.savefig(os.path.join(plot_dir, f'{file_prefix}Report_plot_IMU_Position_to_GPS_Post_Dive.png'))
         plt.close()
 
         GPS_OffsetG = Good_GPS_Data['Distance_m'].mean() if not Good_GPS_Data.empty else 0
@@ -1047,7 +1076,7 @@ def find_best_time_offset(df, col1='AltitudeRateChange_Smooth', col2='Pitch_Smoo
     print(f"Best lag: {best_lag} samples, Time offset: {time_offset_sec:.2f} seconds")
     return best_lag, time_offset_sec, corr
 
-def outlier_check( Variable, Time,max_change_rate, varince_max, variable_name, plot_dir):
+def outlier_check( Variable, Time,max_change_rate, varince_max, variable_name, plot_dir, file_prefix=''):
     """
     Check for outliers in the given variable based on the maximum change rate.
     Args:
@@ -1055,6 +1084,7 @@ def outlier_check( Variable, Time,max_change_rate, varince_max, variable_name, p
         Variable (pd.Series): Variable to check for outliers.
         max_change_rate (float): Maximum allowed change rate.
         plot_dir (str): Directory to save the plot.
+        file_prefix (str): Prefix for output files (e.g., 'DIVE001_LLS_')
     Returns:
         pd.Series: Boolean series indicating outliers.
     """
@@ -1095,7 +1125,7 @@ def outlier_check( Variable, Time,max_change_rate, varince_max, variable_name, p
     plt.ylabel('Variable')
     plt.title('Outlier Check')
     plt.legend()
-    plt.savefig(os.path.join(plot_dir, f'outlier_check_{variable_name}.png'))
+    plt.savefig(os.path.join(plot_dir, f'{file_prefix}outlier_check_{variable_name}.png'))
     plt.close()
 
 

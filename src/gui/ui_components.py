@@ -210,6 +210,7 @@ class UIComponents:
         """Create LLS processing section"""
         lls_section = ttk.LabelFrame(self.functions_frame, text="Laser Data Processing", padding="5")
         lls_section.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        lls_section.columnconfigure(0, weight=1)
         
         self.lls_processing_checkbox = ttk.Checkbutton(
             lls_section, 
@@ -217,7 +218,29 @@ class UIComponents:
             variable=self.lls_processing_var,
             command=self.update_all_checkbox
         )
-        self.lls_processing_checkbox.grid(row=0, column=0, sticky='w')
+        self.lls_processing_checkbox.grid(row=0, column=0, sticky='w', columnspan=3)
+        
+        # Storage mode selection
+        storage_frame = ttk.Frame(lls_section)
+        storage_frame.grid(row=1, column=0, sticky='w', padx=(20, 0), pady=(5, 0), columnspan=3)
+        
+        ttk.Label(storage_frame, text="Data Storage:", font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.lls_copy_radio = ttk.Radiobutton(
+            storage_frame,
+            text="Copy to Temp (safer, requires disk space)",
+            variable=self.lls_processing_mode,
+            value='copy'
+        )
+        self.lls_copy_radio.pack(side=tk.LEFT, padx=(0, 15))
+        
+        self.lls_inplace_radio = ttk.Radiobutton(
+            storage_frame,
+            text="Process In-Place (saves disk space)",
+            variable=self.lls_processing_mode,
+            value='inplace'
+        )
+        self.lls_inplace_radio.pack(side=tk.LEFT)
 
     def _create_imagery_processing_section(self):
         """Create imagery processing section"""

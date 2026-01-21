@@ -617,7 +617,7 @@ def Summary_plots(dfLS, plot_dir, DIVE_NAME, df_Full_Dive, MIN_INTENSITY_THRESHO
     log_message("All summary plots generated successfully")
 
 def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD, RADIUS, 
-                         gui_output_dir=None, xyz_files=None, log_callback=None, file_prefix="LLS_"):
+                         gui_output_dir=None, xyz_files=None, log_callback=None, file_prefix="LLS_", stop_check_callback=None):
     """
     Main function to process LLS data and generate summary plots.
     :param BaseDir: Base directory containing the data.
@@ -627,6 +627,7 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     :param gui_output_dir: Output directory defined in GUI (if None, uses default BaseDir structure)
     :param xyz_files: dont need to include, if empty it runs all LLS*.xyz files in the LLS dir, or you can specify certain XYZ files
     :param log_callback: Optional callback function for logging messages to GUI
+    :param stop_check_callback: Optional callback function to check if processing should stop
     """
     
     # Helper function to log to both terminal and GUI
@@ -720,6 +721,11 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     successfully_processed = 0
     
     for file in valid_xyz_files:
+        # Check if processing should stop
+        if stop_check_callback and stop_check_callback():
+            log_message(f"🛑 Processing stopped after {successfully_processed} of {len(valid_xyz_files)} files")
+            break
+            
         file_count += 1
         log_message(f"Processing file {file_count}/{len(valid_xyz_files)}: {os.path.basename(file)}")
         
@@ -736,9 +742,6 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
         log_message("Error: No data was successfully processed from any files")
         return False
     
-    log_message(f"Successfully processed {successfully_processed} out of {len(valid_xyz_files)} files")
-    log_message(f"Total data points collected: {len(rows_list)}")
-
     log_message(f"Successfully processed {successfully_processed} out of {len(valid_xyz_files)} files")
     log_message(f"Total data points collected: {len(rows_list)}")
 
@@ -810,7 +813,7 @@ def Step01_Find_Good_Data(BaseDir, MIN_INTENSITY_THRESHOLD, BAD_POINT_THRESHOLD,
     vehicle_plot_dir = output_dir if output_dir else VehicleOutputDir
     
     try:
-        StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = phins.NAV_surface_offset(VehicleDir, vehicle_plot_dir, pd.to_datetime(time_start_list, utc=True).mean())
+        StartDive, EndDive, GPS_OffsetG, GPS_OffsetP = phins.NAV_surface_offset(VehicleDir, vehicle_plot_dir, pd.to_datetime(time_start_list, utc=True).mean(), file_prefix)
         
         # Check if we got valid datetime values
         if pd.isna(StartDive) or pd.isna(EndDive):
