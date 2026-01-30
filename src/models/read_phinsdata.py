@@ -2,6 +2,8 @@
 
 import csv
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend for thread safety
 import matplotlib.pyplot as plt
 import os
 import numpy as np
@@ -64,9 +66,13 @@ def read_unique_identifiers(file_path):
     # time updates in a separate data string, add to all the other data frames based on this one
     TIME=""
     Time_Last=0
+    invalid_checksum_count = 0
+    invalid_checksum_types = set()
+    
     # Open the binary file and decode it as text
     with open(file_path, 'rb') as binary_file:
-        decoded_content = binary_file.read().replace(b'\x00', b'').decode('utf-8')
+        # Use errors='ignore' to skip invalid UTF-8 bytes that might cause corruption
+        decoded_content = binary_file.read().replace(b'\x00', b'').decode('utf-8', errors='ignore')
 
         # Use csv.reader to parse the decoded content
         csv_reader = csv.reader(decoded_content.splitlines())
@@ -75,7 +81,16 @@ def read_unique_identifiers(file_path):
             row_str = ','.join(row)  # Join columns back to a single string
             is_valid, calc, expected = verify_nmea_checksum(row_str)
             if not is_valid:
-                print(f"Invalid checksum for row: {row}, calculated: {calc}, expected: {expected}")
+                invalid_checksum_count += 1
+                # Track unique message types with checksum errors
+                if len(row) >= 2:
+                    msg_type = row[0] if row[0].startswith('$') else 'Unknown'
+                    if len(row) > 1 and row[0] == '$PIXSE':
+                        msg_type = f"{row[0]}_{row[1]}"
+                    invalid_checksum_types.add(msg_type)
+                # Only print first few errors to avoid flooding console
+                if invalid_checksum_count <= 10:
+                    print(f"Invalid checksum for row: {row}, calculated: {calc}, expected: {expected}")
                 continue
             row = [col.split('*')[0] for col in row]
             if len(row) >= 2:  # Ensure there's at least one identifier
@@ -196,6 +211,14 @@ def read_unique_identifiers(file_path):
                         data_frames['HETHS']['Time_REF'].append(TIME)
                     except ValueError:
                         a=1
+    
+    # Print summary of parsing issues
+    if invalid_checksum_count > 0:
+        print(f"\nPHINS Data Parsing Summary:")
+        print(f"  Total invalid checksums: {invalid_checksum_count}")
+        if invalid_checksum_types:
+            print(f"  Message types with errors: {', '.join(sorted(invalid_checksum_types))}")
+        print(f"  Note: Invalid checksum rows were skipped and will not affect processing.\n")
 
     # Convert each dictionary to a DataFrame
     for key in data_frames:
@@ -492,7 +515,7 @@ def add_IMU_NAV(df, Dir, TimeOffset=0):
         else:
             raise FileNotFoundError(f"Could not find UTMWGS.csv or UTMWGS84.csv in {Dir}")
         
-        df_UTMWGS=pd.read_csv(utmwgs_file)
+        df_UTMWGS=pd.read_csv(utmwgs_file, low_memory=False)
         # AUV_Easting,AUV_Northing columns (from text nav) or Easting,Northing (from binary)
         # Check which columns exist and rename if needed
         if 'Easting' in df_UTMWGS.columns and 'AUV_Easting' not in df_UTMWGS.columns:

@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import datetime
 import csv
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend for thread safety
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 import glob

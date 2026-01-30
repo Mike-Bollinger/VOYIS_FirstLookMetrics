@@ -228,35 +228,70 @@ class LLSProcessor:
         lls_dir = os.path.join(temp_base_dir, 'LLS')
         
         # Remove existing if present
-        if os.path.exists(lls_dir):
+        if os.path.exists(lls_dir) or os.path.islink(lls_dir):
+            self.log_message(f"Cleaning up existing path: {lls_dir}")
             # On Windows, junctions appear as directories but need special handling
             # Check if it's a reparse point (junction/symlink)
             if sys.platform == 'win32':
                 import stat
+                is_junction = False
                 try:
                     # Try to detect if it's a junction by checking FILE_ATTRIBUTE_REPARSE_POINT
                     attrs = os.stat(lls_dir, follow_symlinks=False)
                     is_junction = bool(attrs.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
-                except (AttributeError, OSError):
+                    self.log_message(f"  → Detected as reparse point (junction/symlink): {is_junction}")
+                except (AttributeError, OSError) as e:
                     # Fallback: try to remove as junction first
+                    self.log_message(f"  → Could not detect type, assuming junction: {e}")
                     is_junction = True
                 
                 if is_junction:
                     # Use os.rmdir for junctions on Windows (not shutil.rmtree)
                     try:
                         os.rmdir(lls_dir)
-                    except:
-                        os.unlink(lls_dir)
+                        self.log_message(f"  → Removed junction with os.rmdir")
+                    except Exception as e1:
+                        try:
+                            os.unlink(lls_dir)
+                            self.log_message(f"  → Removed junction with os.unlink")
+                        except Exception as e2:
+                            self.log_message(f"  → Warning: Could not remove junction: rmdir={e1}, unlink={e2}")
                 else:
-                    shutil.rmtree(lls_dir)
+                    try:
+                        shutil.rmtree(lls_dir)
+                        self.log_message(f"  → Removed directory tree")
+                    except Exception as e:
+                        self.log_message(f"  → Warning: Could not remove directory: {e}")
             elif os.path.islink(lls_dir):
-                os.unlink(lls_dir)
+                try:
+                    os.unlink(lls_dir)
+                    self.log_message(f"  → Removed symlink")
+                except Exception as e:
+                    self.log_message(f"  → Warning: Could not remove symlink: {e}")
             else:
-                shutil.rmtree(lls_dir)
+                try:
+                    shutil.rmtree(lls_dir)
+                    self.log_message(f"  → Removed directory tree")
+                except Exception as e:
+                    self.log_message(f"  → Warning: Could not remove directory: {e}")
         
         # Try to create junction/symlink to avoid copying
         junction_created = False
         try:
+            # Final safety check: ensure path doesn't exist before creating junction
+            if os.path.exists(lls_dir) or os.path.islink(lls_dir):
+                self.log_message(f"Warning: Path still exists after cleanup, forcing removal...")
+                try:
+                    if sys.platform == 'win32':
+                        try:
+                            os.rmdir(lls_dir)
+                        except:
+                            os.unlink(lls_dir)
+                    else:
+                        os.unlink(lls_dir) if os.path.islink(lls_dir) else shutil.rmtree(lls_dir)
+                except Exception as e:
+                    self.log_message(f"Could not force remove path: {e}")
+            
             if sys.platform == 'win32':
                 # Use junction on Windows - this doesn't require admin rights
                 # IMPORTANT: Use quoted paths to handle spaces and special chars
@@ -272,6 +307,12 @@ class LLSProcessor:
                     self.log_message(f"Created directory junction: {lls_dir} -> {lls_folder}")
                 else:
                     self.log_message(f"Junction creation failed: {result.stderr}")
+                    # If junction failed, ensure path is cleaned up for fallback
+                    if os.path.exists(lls_dir):
+                        try:
+                            os.rmdir(lls_dir)
+                        except:
+                            pass
             else:
                 # Use symlink on Unix
                 os.symlink(lls_folder, lls_dir, target_is_directory=True)
@@ -283,6 +324,27 @@ class LLSProcessor:
         # If junction/symlink failed, create LLS directory and create symlinks for each file
         if not junction_created:
             self.log_message("Creating file references instead of directory junction...")
+            
+            # Clean up any partial junction that might exist
+            if os.path.exists(lls_dir):
+                try:
+                    # Try to remove as junction/reparse point first
+                    if sys.platform == 'win32':
+                        try:
+                            os.rmdir(lls_dir)  # Works for junctions
+                        except:
+                            try:
+                                os.unlink(lls_dir)  # Works for symlinks
+                            except:
+                                shutil.rmtree(lls_dir)  # Last resort
+                    else:
+                        if os.path.islink(lls_dir):
+                            os.unlink(lls_dir)
+                        else:
+                            shutil.rmtree(lls_dir)
+                except Exception as cleanup_error:
+                    self.log_message(f"Warning: Could not clean up existing path: {cleanup_error}")
+            
             os.makedirs(lls_dir, exist_ok=True)
             
             # Create symlinks/junctions for individual files
