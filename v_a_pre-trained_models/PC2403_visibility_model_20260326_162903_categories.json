@@ -1,0 +1,11 @@
+{
+  "categories": [
+    "zero",
+    "poor",
+    "fair",
+    "good",
+    "excellent"
+  ],
+  "num_classes": 5,
+  "order": "worst_to_best"
+}
