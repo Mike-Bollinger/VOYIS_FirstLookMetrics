@@ -128,12 +128,12 @@ class VisibilityAnalyzer:
                 self.tf = tf
                 
                 # Check for GPU
-                gpus = tf.config.experimental.list_physical_devices('GPU')
+                gpus = tf.config.list_physical_devices('GPU')
                 if gpus:
                     try:
-                        # Enable memory growth for GPU
+                        # Enable memory growth for GPU (prevents TF from grabbing all VRAM)
                         for gpu in gpus:
-                            tf.config.experimental.set_memory_growth(gpu, True)
+                            tf.config.set_memory_growth(gpu, True)
                         self.using_gpu = True
                         self.log_message(f"✓ TensorFlow loaded with GPU support ({len(gpus)} GPU(s) found)")
                     except Exception as e:
@@ -792,10 +792,10 @@ class VisibilityAnalyzer:
             visibility_counts = df['visibility'].value_counts()
             
             # Create figure with subplots for thumbnails
-            fig = self._plt.figure(figsize=(16, 8))
+            fig = self._plt.figure(figsize=(16, 10))
             
-            # Main bar chart (left side)
-            ax_bar = self._plt.subplot2grid((1, 6), (0, 0), colspan=3)
+            # Main bar chart (top, full width, 2/3 of figure)
+            ax_bar = self._plt.subplot2grid((3, 5), (0, 0), colspan=5, rowspan=2)
             
             # Prepare data for bar chart
             categories_present = [cat for cat in category_order if cat in visibility_counts.index]
@@ -811,18 +811,18 @@ class VisibilityAnalyzer:
                            f'{int(count)}',
                            ha='center', va='bottom', fontsize=12, fontweight='bold')
             
-            ax_bar.set_title('Visibility Distribution Analysis', fontsize=16, fontweight='bold', pad=20)
-            ax_bar.set_xlabel('Visibility Category', fontsize=12, fontweight='bold')
-            ax_bar.set_ylabel('Number of Images', fontsize=12, fontweight='bold')
+            ax_bar.set_title('Visibility Distribution Analysis', fontsize=18, fontweight='bold', pad=20)
+            ax_bar.set_xlabel('Visibility Category', fontsize=14, fontweight='bold')
+            ax_bar.set_ylabel('Number of Images', fontsize=14, fontweight='bold')
             ax_bar.set_xticks(range(len(categories_present)))
-            ax_bar.set_xticklabels([cat.title() for cat in categories_present], fontsize=11)
+            ax_bar.set_xticklabels([cat.title() for cat in categories_present], fontsize=12)
             ax_bar.grid(axis='y', alpha=0.3, linestyle='--')
             ax_bar.set_axisbelow(True)
             
-            # Add example thumbnails (right side)
+            # Add example thumbnails (bottom row, one per category)
             thumbnail_axes = []
             for i in range(5):
-                ax_thumb = self._plt.subplot2grid((5, 6), (i, 3), colspan=3)
+                ax_thumb = self._plt.subplot2grid((3, 5), (2, i))
                 thumbnail_axes.append(ax_thumb)
             
             # Find example images for each category (use highest confidence)
@@ -878,9 +878,10 @@ class VisibilityAnalyzer:
                                 img_rgb = self._cv2.cvtColor(img, self._cv2.COLOR_BGR2RGB)
                                 ax.imshow(img_rgb)
                                 confidence_pct = best_image['confidence'] * 100
-                                ax.set_title(f"{category.title()} ({confidence_pct:.1f}%)", 
-                                           fontsize=10, fontweight='bold',
-                                           color=color_map.get(category, '#000000'))
+                                ax.set_title(f"{category.title()}\nConfidence: {confidence_pct:.1f}%", 
+                                           fontsize=11, fontweight='bold',
+                                           color=color_map.get(category, '#000000'),
+                                           pad=8)
                                 self.log_message(f"✓ Loaded thumbnail for {category}")
                             else:
                                 ax.text(0.5, 0.5, f'{category.title()}\nLoad Failed', 

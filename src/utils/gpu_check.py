@@ -99,7 +99,7 @@ def check_gpu():
                         # Try to get device details using experimental API
                         try:
                             # Configure memory growth to avoid taking all GPU memory
-                            tf.config.experimental.set_memory_growth(device, True)
+                            tf.config.set_memory_growth(device, True)
                             print(f"        Memory growth enabled")
                         except Exception as e:
                             print(f"        Could not enable memory growth: {e}")
@@ -181,7 +181,7 @@ def check_gpu():
         if gpu_info['gpu_acceleration_available']:
             print(f"✓ GPU acceleration is AVAILABLE with {gpu_info['gpus_found']} device(s)")
             print(f"✓ TensorFlow {gpu_info['tensorflow_version']} is using CUDA")
-            if hasattr(gpu_info, 'performance_test') and gpu_info['performance_test']['speedup'] > 1:
+            if 'performance_test' in gpu_info and gpu_info['performance_test']['speedup'] > 1:
                 print(f"✓ Performance test shows {gpu_info['performance_test']['speedup']:.2f}x speedup with GPU")
             print("\nImage visibility analysis will use GPU acceleration automatically.")
         else:
@@ -238,17 +238,27 @@ def main():
             print("   pip install tensorflow")
         elif not gpu_info['cuda_available']:
             print("\nTo enable GPU acceleration:")
-            print("1. Make sure NVIDIA CUDA Toolkit is installed")
-            print("2. Make sure NVIDIA cuDNN is installed")
-            print("3. Install TensorFlow with GPU support:")
-            print("   pip install tensorflow")
+            print("IMPORTANT: TensorFlow 2.10 was the last release to support native Windows GPU.")
+            print("For TF 2.11+, NVIDIA GPU support on Windows requires one of:")
+            print("")
+            print("  Option A (Recommended) - WSL2 + TensorFlow with CUDA:")
+            print("    1. Enable WSL2 on Windows 10/11")
+            print("    2. Inside WSL2: pip install tensorflow[and-cuda]")
+            print("")
+            print("  Option B - Native Windows with TF 2.10 (last GPU-capable Windows build):")
+            print("    1. conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0")
+            print('    2. pip install "tensorflow<2.11"')
+            print("    Note: Requires Python 3.7-3.10. Not compatible with Python 3.11+.")
+            print("")
+            print("  Current install detected: 'tensorflow-intel' is a CPU-only Intel build.")
+            print("  Uninstall it first: pip uninstall tensorflow-intel tensorflow")
         elif gpu_info['gpus_found'] == 0:
             print("\nNo compatible NVIDIA GPU was detected. If you have a GPU:")
             print("1. Make sure your GPU drivers are up to date")
-            print("2. Make sure NVIDIA CUDA Toolkit is installed and compatible with your GPU")
-            print("3. Make sure your GPU is supported by TensorFlow")
+            print("2. See CUDA/WSL2 setup options above")
+            print("3. Make sure your GPU is supported by TensorFlow (CUDA arch 3.5+)")
     
-    print("\nFor more information, visit: https://www.tensorflow.org/install/gpu")
+    print("\nFor more information, visit: https://www.tensorflow.org/install/pip#windows-native")
 
 if __name__ == "__main__":
     main()

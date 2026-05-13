@@ -19,8 +19,16 @@ seaborn>=0.11.0
 geopandas>=0.10.0
 shapely>=1.8.0
 
-# Machine Learning (Used in some analysis modules)
+# Machine Learning and Deep Learning (Used in visibility analysis)
 scikit-learn>=1.0.0
+
+# TensorFlow - Required for visibility analysis model (inference + training)
+# Windows native: pip install "tensorflow<2.11" (last version with Windows GPU support)
+#   + conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0
+# Windows WSL2 / Linux (GPU): pip install tensorflow[and-cuda]
+# CPU only (any platform): pip install tensorflow
+# NOTE: tensorflow-intel (Intel CPU build) does NOT support NVIDIA GPUs.
+tensorflow>=2.10.0
 
 # Date/Time Processing
 python-dateutil>=2.8.0
