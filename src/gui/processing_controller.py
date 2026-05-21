@@ -488,34 +488,28 @@ class ProcessingController:
             if self.check_stop_flag():
                 return
             
-            # Convert Image_Metrics.csv to Shapefile (if it exists)
-            # This happens regardless of which boxes are checked, as long as any imagery processing occurred
-            if imagery_selected:
-                self.log_message("\nFINAL STEP: Converting metrics CSV to ESRI Shapefile...")
-                try:
-                    from src.utils.file_utils import convert_csv_to_shapefile
-                    
-                    # Use the dive-prefixed CSV name
-                    dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
-                    csv_filename = f"{dive_prefix}Metrics.csv"
-                    csv_path = os.path.join(output_folder, csv_filename)
-                    
-                    if os.path.exists(csv_path):
-                        shapefile_path = convert_csv_to_shapefile(
-                            csv_path=csv_path,
-                            log_callback=self.log_message
-                        )
-                        
-                        if shapefile_path:
-                            self.log_message("✓ Shapefile export completed")
+            # Regenerate shapefiles for every Image_Metrics CSV found in the
+            # output folder.  This runs regardless of which modules were selected
+            # so the SHP always stays in sync with the CSV.
+            self.log_message("\nFINAL STEP: Syncing Image_Metrics shapefiles...")
+            try:
+                import glob
+                from src.utils.csv_to_shapefile import csv_to_shp
+
+                metrics_csvs = glob.glob(os.path.join(output_folder, "*Image_Metrics.csv"))
+                if metrics_csvs:
+                    for csv_path in metrics_csvs:
+                        success, msg = csv_to_shp(csv_path, log_fn=self.log_message)
+                        if success:
+                            self.log_message(f"✓ Shapefile updated: {os.path.basename(msg)}")
                         else:
-                            self.log_message("⚠ Shapefile export skipped (no coordinates or geopandas unavailable)")
-                    else:
-                        self.log_message(f"⚠ {csv_filename} not found - shapefile export skipped")
-                        
-                except Exception as shapefile_error:
-                    self.log_message(f"⚠ Error during shapefile export: {shapefile_error}")
-                    self.log_message("   Processing completed successfully, but shapefile was not created")
+                            self.log_message(f"⚠ Shapefile export skipped: {msg}")
+                else:
+                    self.log_message("   No Image_Metrics CSV found in output folder – shapefile step skipped")
+
+            except Exception as shapefile_error:
+                self.log_message(f"⚠ Error during shapefile sync: {shapefile_error}")
+                self.log_message("   Processing completed successfully, but shapefile was not updated")
             
             # Final overall summary
             total_processes = (1 if nav_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)

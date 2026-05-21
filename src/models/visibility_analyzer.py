@@ -183,9 +183,9 @@ class VisibilityAnalyzer:
                 return None
                 
             self.log_message(f"Loading model from: {model_path}")
-            model = self.tf.keras.models.load_model(model_path)
-            
-            # Try to load category mapping if it exists
+
+            # Load category mapping first — needed to size the output layer correctly.
+            # This must happen before rebuilding the architecture.
             import json
             category_mapping_path = model_path.replace('.h5', '_categories.json')
             if os.path.exists(category_mapping_path):
@@ -201,20 +201,43 @@ class VisibilityAnalyzer:
                 self.log_message("⚠️ No category mapping file found")
                 self.log_message(f"Using default categories: {self.categories}")
                 self.log_message("RECOMMENDATION: Retrain the model to save category mapping")
-            
-            # Verify model output matches expected categories
-            output_shape = model.output_shape[-1]
-            expected_categories = len(self.categories)
-            
-            if output_shape != expected_categories:
-                self.log_message(f"⚠️ WARNING: Model mismatch detected!")
-                self.log_message(f"   Model has {output_shape} output classes")
-                self.log_message(f"   Expected {expected_categories} categories: {self.categories}")
-                self.log_message(f"   This model may have been trained on different categories.")
-                self.log_message(f"   RECOMMENDATION: Retrain the model with the current training data.")
-            else:
-                self.log_message(f"✓ Model output matches {expected_categories} categories")
-            
+
+            n_categories = len(self.categories)
+
+            # Rebuild the architecture programmatically instead of deserialising from
+            # the .h5 config.  Keras 3 serialises layer configs with types (DTypePolicy,
+            # module paths, etc.) that tf_keras / older Keras cannot parse, and Keras 3
+            # itself has a bug reconstructing Sequential models that wrap a functional
+            # sub-model (VGG16) from config.  Rebuilding in code sidesteps all of that;
+            # the weight tensors themselves are plain floats and fully version-agnostic.
+            self.log_message("Rebuilding model architecture...")
+            base_model = self.tf.keras.applications.VGG16(
+                weights='imagenet',
+                include_top=False,
+                input_shape=(224, 224, 3)
+            )
+            base_model.trainable = False
+
+            model = self.tf.keras.models.Sequential([
+                base_model,
+                self.tf.keras.layers.GlobalAveragePooling2D(),
+                self.tf.keras.layers.Dense(512, activation='relu'),
+                self.tf.keras.layers.Dropout(0.5),
+                self.tf.keras.layers.Dense(n_categories, activation='softmax')
+            ])
+            model.compile(
+                optimizer=self.tf.keras.optimizers.Adam(learning_rate=0.001),
+                loss='categorical_crossentropy',
+                metrics=['accuracy']
+            )
+
+            # Load only the trained weights from the .h5 file.
+            # Keras navigates to the 'model_weights' group automatically when
+            # the file is a full model save rather than a weights-only save.
+            self.log_message("Loading trained weights...")
+            model.load_weights(model_path)
+
+            self.log_message(f"✓ Model output matches {n_categories} categories")
             self.log_message("Model loaded successfully")
             return model
         except Exception as e:
@@ -1093,40 +1116,52 @@ class VisibilityAnalyzer:
             results: Results dictionary from analyze_images method
         """
         try:
-            # Load the CSV file
+            # Load the master CSV
             df = self._pd.read_csv(csv_path)
-            
-            # Check if we have visibility results CSV
+
+            # Locate the visibility results CSV produced by analyze_images
             visibility_csv_path = results.get('csv_path')
-            if visibility_csv_path and os.path.exists(visibility_csv_path):
-                # Load visibility results
-                vis_df = self._pd.read_csv(visibility_csv_path)
-                
-                # Create a mapping from filename to visibility data
-                visibility_map = {}
-                for _, row in vis_df.iterrows():
-                    filename = row['image']
-                    visibility_map[filename] = {
-                        'visibility': row['visibility'],
-                        'visibility_confidence': row['confidence']
-                    }
-                
-                # Add visibility columns to master CSV if they don't exist
-                if 'visibility' not in df.columns:
-                    df['visibility'] = None
-                if 'visibility_confidence' not in df.columns:
-                    df['visibility_confidence'] = None
-                
-                # Update master CSV with visibility data
-                for idx, row in df.iterrows():
-                    filename = row['filename']
-                    if filename in visibility_map:
-                        df.at[idx, 'visibility'] = visibility_map[filename]['visibility']
-                        df.at[idx, 'visibility_confidence'] = visibility_map[filename]['visibility_confidence']
-                
-                # Save updated CSV
-                df.to_csv(csv_path, index=False)
-                self.log_message(f"Updated master CSV with visibility results: {csv_path}")
-            
+            if not visibility_csv_path or not os.path.exists(visibility_csv_path):
+                self.log_message(f"⚠ Visibility results CSV not found: {visibility_csv_path}")
+                return
+
+            # Load visibility results
+            vis_df = self._pd.read_csv(visibility_csv_path)
+            self.log_message(f"  Merging {len(vis_df)} visibility results into master CSV...")
+
+            # Normalise column names to match master CSV (filename, visibility, visibility_confidence)
+            vis_df = vis_df.rename(columns={
+                'image': 'filename',
+                'confidence': 'visibility_confidence'
+            })[['filename', 'visibility', 'visibility_confidence']]
+
+            # Drop any stale visibility columns so the merge overwrites cleanly
+            df = df.drop(columns=['visibility', 'visibility_confidence'], errors='ignore')
+
+            # Left-join: keeps all master rows; unmatched rows get NaN in visibility cols
+            df = df.merge(vis_df, on='filename', how='left')
+
+            # Report how many rows got values
+            matched = df['visibility'].notna().sum()
+            self.log_message(f"  Visibility populated for {matched}/{len(df)} images")
+
+            # Preserve original column order with visibility after is_highlight
+            cols = list(df.columns)
+            for col in ['visibility', 'visibility_confidence']:
+                if col in cols:
+                    cols.remove(col)
+            insert_after = 'is_highlight' if 'is_highlight' in cols else cols[-1]
+            idx = cols.index(insert_after) + 1
+            cols = cols[:idx] + ['visibility', 'visibility_confidence'] + cols[idx:]
+            # Remove duplicates while preserving order
+            seen = set()
+            cols = [c for c in cols if not (c in seen or seen.add(c))]
+            df = df[cols]
+
+            df.to_csv(csv_path, index=False)
+            self.log_message(f"✓ Master CSV updated with visibility results: {csv_path}")
+
         except Exception as e:
             self.log_message(f"Error updating master CSV with visibility results: {e}")
+            import traceback
+            self.log_message(traceback.format_exc())

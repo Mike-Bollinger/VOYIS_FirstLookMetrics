@@ -1,5 +1,5 @@
 # Core GUI and System Libraries
-tkinter  # Usually comes with Python, but listed for completeness
+#tkinter  # Usually comes with Python, but listed for completeness
 
 # Image Processing and Computer Vision
 Pillow>=9.0.0
