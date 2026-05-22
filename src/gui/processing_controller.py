@@ -244,6 +244,11 @@ class ProcessingController:
                        
             # Check what processing is selected
             nav_selected = self.nav_processing_var.get()
+            turbidity_selected = (
+                nav_selected
+                and hasattr(self, 'turbidity_plot_var')
+                and self.turbidity_plot_var.get()
+            )
             lls_selected = self.lls_processing_var.get()
             imagery_selected = any([
                 self.basic_metrics_var.get(),
@@ -253,9 +258,6 @@ class ProcessingController:
                 self.visibility_analyzer_var.get(),
                 self.highlight_selector_var.get()
             ])
-            
-            # PhinsData manager has been deprecated and removed
-            # All modules now use CSV-based processing for consistency
             
             # Process Navigation data first if selected (but skip if already done in batch processing)
             if nav_selected and not skip_nav_processing:
@@ -271,7 +273,19 @@ class ProcessingController:
                     self.log_message(f"Traceback: {traceback.format_exc()}")
             elif nav_selected and skip_nav_processing:
                 self.log_message("⚬ Skipping navigation processing (already completed in batch mode)")
-            
+
+            # Process Turbidity data if selected (requires nav_directory to be set)
+            if turbidity_selected and not skip_nav_processing:
+                if self.check_stop_flag():
+                    return
+                self.log_message("Processing Turbidity data...")
+                try:
+                    self.process_turbidity_data(output_folder)
+                    self.log_message("✓ Turbidity processing completed")
+                except Exception as turb_error:
+                    self.log_message(f"✗ Turbidity processing failed: {turb_error}")
+                    self.log_message(f"Traceback: {traceback.format_exc()}")
+
             # Process LLS data if selected
             if lls_selected:
                 if self.check_stop_flag():
@@ -512,13 +526,15 @@ class ProcessingController:
                 self.log_message("   Processing completed successfully, but shapefile was not updated")
             
             # Final overall summary
-            total_processes = (1 if nav_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
+            total_processes = (1 if nav_selected else 0) + (1 if turbidity_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
             self.log_message(f"\n{'='*60}")
             self.log_message(f"OVERALL PROCESSING SUMMARY")
             self.log_message(f"{'='*60}")
             
             if nav_selected:
                 self.log_message("Navigation Processing: Completed")
+            if turbidity_selected:
+                self.log_message("Turbidity Processing: Completed")
             if lls_selected:
                 self.log_message("LLS Processing: Completed")
             if imagery_selected:
@@ -587,6 +603,43 @@ class ProcessingController:
             self.log_message("Navigation plotting will be skipped")
         except Exception as e:
             self.log_message(f"Error during navigation plotting: {str(e)}")
+            self.log_message(f"Traceback: {traceback.format_exc()}")
+
+    def process_turbidity_data(self, output_folder):
+        """Process turbidity data from MCAP bag files in the navigation directory."""
+        self.log_message("STAGE 1b: Processing Turbidity data from bag files...")
+
+        nav_directory = self.nav_directory_path.get() if hasattr(self, 'nav_directory_path') else ""
+
+        if not nav_directory or not os.path.exists(nav_directory):
+            self.log_message("⚠ Navigation directory not specified or doesn't exist – turbidity skipped.")
+            return
+
+        try:
+            from src.models.turbidity_processor import TurbidityProcessor
+
+            dive_prefix = (
+                self.dive_prefix_nav
+                if hasattr(self, 'dive_prefix_nav') and self.dive_prefix_nav
+                else ""
+            )
+
+            processor = TurbidityProcessor(log_callback=self.log_message)
+            success = processor.process(
+                nav_directory=nav_directory,
+                output_dir=output_folder,
+                file_prefix=dive_prefix,
+            )
+
+            if success:
+                self.update_progress(22, "Turbidity processing completed")
+            else:
+                self.log_message("⚠ No turbidity data found – plots not generated")
+
+        except ImportError as e:
+            self.log_message(f"Error: Could not import TurbidityProcessor: {e}")
+        except Exception as e:
+            self.log_message(f"Error during turbidity processing: {str(e)}")
             self.log_message(f"Traceback: {traceback.format_exc()}")
 
     def process_lls_data(self, output_folder):

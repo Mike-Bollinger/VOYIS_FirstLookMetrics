@@ -206,6 +206,15 @@ class UIComponents:
         self.nav_directory_button = ttk.Button(nav_section, text="Browse...", command=self.select_nav_directory)
         self.nav_directory_button.grid(row=1, column=2)
 
+        # Turbidity plotting checkbox
+        self.turbidity_plot_checkbox = ttk.Checkbutton(
+            nav_section,
+            text="Plot Turbidity (from Bag Files — scans Navigation Directory recursively)",
+            variable=self.turbidity_plot_var,
+            command=self.update_all_checkbox,
+        )
+        self.turbidity_plot_checkbox.grid(row=2, column=0, sticky='w', columnspan=3, padx=(20, 0), pady=(4, 0))
+
     def _create_lls_processing_section(self):
         """Create LLS processing section"""
         lls_section = ttk.LabelFrame(self.functions_frame, text="Laser Data Processing", padding="5")

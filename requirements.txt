@@ -36,5 +36,8 @@ python-dateutil>=2.8.0
 # Enhanced GUI Features (Optional)
 tkinterdnd2>=0.3.0
 
+# ROS2 MCAP bag file reading (for turbidity data from R620 AUV bags)
+mcap>=1.0.0
+
 # File and Path Utilities (Python 3.7+ has pathlib built-in, but this ensures compatibility)
 pathlib2>=2.3.0; python_version<"3.4"

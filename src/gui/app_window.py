@@ -85,6 +85,9 @@ class AppWindow(UIComponents, ProcessingController):
         self.batch_csv_path = tk.StringVar()
         self.batch_var = tk.BooleanVar()  # Add this for ProcessingController compatibility
         
+        # Turbidity plotting variable
+        self.turbidity_plot_var = tk.BooleanVar(value=False)
+
         # Processing function variables
         self.lls_processing_var = tk.BooleanVar(value=True)
         self.basic_metrics_var = tk.BooleanVar(value=True)
@@ -379,14 +382,24 @@ class AppWindow(UIComponents, ProcessingController):
         # Navigation Processing Section
         nav_section = ttk.LabelFrame(self.functions_frame, text="Navigation Data Plotting", padding="5")
         nav_section.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
-        
+        nav_section.columnconfigure(1, weight=1)
+
         self.nav_processing_checkbox = ttk.Checkbutton(
             nav_section, 
             text="Process Navigation Data for Plotting", 
             variable=self.nav_processing_var,
             command=self.update_all_checkbox
         )
-        self.nav_processing_checkbox.grid(row=0, column=0, sticky='w')
+        self.nav_processing_checkbox.grid(row=0, column=0, sticky='w', columnspan=3)
+
+        # Turbidity checkbox
+        self.turbidity_plot_checkbox = ttk.Checkbutton(
+            nav_section,
+            text="Plot Turbidity (from Bag Files — scans Navigation Directory recursively)",
+            variable=self.turbidity_plot_var,
+            command=self.update_all_checkbox,
+        )
+        self.turbidity_plot_checkbox.grid(row=1, column=0, sticky='w', columnspan=3, pady=(4, 0))
         
         # LLS Processing Section
         lls_section = ttk.LabelFrame(self.functions_frame, text="Laser Data Processing", padding="5")
