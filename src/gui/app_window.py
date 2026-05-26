@@ -88,6 +88,9 @@ class AppWindow(UIComponents, ProcessingController):
         # Turbidity plotting variable
         self.turbidity_plot_var = tk.BooleanVar(value=False)
 
+        # Nav track to shapefile variable
+        self.nav_to_shp_var = tk.BooleanVar(value=False)
+
         # Processing function variables
         self.lls_processing_var = tk.BooleanVar(value=True)
         self.basic_metrics_var = tk.BooleanVar(value=True)
@@ -400,6 +403,15 @@ class AppWindow(UIComponents, ProcessingController):
             command=self.update_all_checkbox,
         )
         self.turbidity_plot_checkbox.grid(row=1, column=0, sticky='w', columnspan=3, pady=(4, 0))
+
+        # Nav track to shapefile checkbox
+        self.nav_to_shp_checkbox = ttk.Checkbutton(
+            nav_section,
+            text="Export Nav Track to Shapefile (dissolved_navtrack.shp)",
+            variable=self.nav_to_shp_var,
+            command=self.update_all_checkbox,
+        )
+        self.nav_to_shp_checkbox.grid(row=2, column=0, sticky='w', columnspan=3, pady=(4, 0))
         
         # LLS Processing Section
         lls_section = ttk.LabelFrame(self.functions_frame, text="Laser Data Processing", padding="5")

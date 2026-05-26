@@ -249,6 +249,11 @@ class ProcessingController:
                 and hasattr(self, 'turbidity_plot_var')
                 and self.turbidity_plot_var.get()
             )
+            nav_to_shp_selected = (
+                nav_selected
+                and hasattr(self, 'nav_to_shp_var')
+                and self.nav_to_shp_var.get()
+            )
             lls_selected = self.lls_processing_var.get()
             imagery_selected = any([
                 self.basic_metrics_var.get(),
@@ -273,6 +278,18 @@ class ProcessingController:
                     self.log_message(f"Traceback: {traceback.format_exc()}")
             elif nav_selected and skip_nav_processing:
                 self.log_message("⚬ Skipping navigation processing (already completed in batch mode)")
+
+            # Export nav track to shapefile if selected
+            if nav_to_shp_selected and not skip_nav_processing:
+                if self.check_stop_flag():
+                    return
+                self.log_message("Exporting Nav Track to Shapefile...")
+                try:
+                    self.process_nav_shapefile(output_folder)
+                    self.log_message("✓ Nav track shapefile export completed")
+                except Exception as shp_error:
+                    self.log_message(f"✗ Nav track shapefile export failed: {shp_error}")
+                    self.log_message(f"Traceback: {traceback.format_exc()}")
 
             # Process Turbidity data if selected (requires nav_directory to be set)
             if turbidity_selected and not skip_nav_processing:
@@ -526,13 +543,15 @@ class ProcessingController:
                 self.log_message("   Processing completed successfully, but shapefile was not updated")
             
             # Final overall summary
-            total_processes = (1 if nav_selected else 0) + (1 if turbidity_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
+            total_processes = (1 if nav_selected else 0) + (1 if nav_to_shp_selected else 0) + (1 if turbidity_selected else 0) + (1 if lls_selected else 0) + (1 if imagery_selected else 0)
             self.log_message(f"\n{'='*60}")
             self.log_message(f"OVERALL PROCESSING SUMMARY")
             self.log_message(f"{'='*60}")
             
             if nav_selected:
                 self.log_message("Navigation Processing: Completed")
+            if nav_to_shp_selected:
+                self.log_message("Nav Track Shapefile: Completed")
             if turbidity_selected:
                 self.log_message("Turbidity Processing: Completed")
             if lls_selected:
@@ -640,6 +659,43 @@ class ProcessingController:
             self.log_message(f"Error: Could not import TurbidityProcessor: {e}")
         except Exception as e:
             self.log_message(f"Error during turbidity processing: {str(e)}")
+            self.log_message(f"Traceback: {traceback.format_exc()}")
+
+    def process_nav_shapefile(self, output_folder):
+        """Export navigation track as a dissolved LineString shapefile."""
+        self.log_message("STAGE 1c: Exporting Nav Track to Shapefile...")
+
+        nav_directory = self.nav_directory_path.get() if hasattr(self, 'nav_directory_path') else ""
+
+        if not nav_directory or not os.path.exists(nav_directory):
+            self.log_message("⚠ Navigation directory not specified or doesn't exist – shapefile export skipped.")
+            return
+
+        try:
+            from src.utils.nav_to_shapefile import nav_to_shapefile
+
+            dive_prefix = (
+                self.dive_prefix_nav
+                if hasattr(self, 'dive_prefix_nav') and self.dive_prefix_nav
+                else ""
+            )
+
+            success = nav_to_shapefile(
+                nav_directory=nav_directory,
+                output_dir=output_folder,
+                file_prefix=dive_prefix,
+                log_fn=self.log_message,
+            )
+
+            if success:
+                self.update_progress(21, "Nav shapefile export completed")
+            else:
+                self.log_message("⚠ Nav track shapefile was not created")
+
+        except ImportError as e:
+            self.log_message(f"Error: Could not import nav_to_shapefile: {e}")
+        except Exception as e:
+            self.log_message(f"Error during nav shapefile export: {str(e)}")
             self.log_message(f"Traceback: {traceback.format_exc()}")
 
     def process_lls_data(self, output_folder):

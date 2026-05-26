@@ -477,7 +477,8 @@ class NavigationDataMerger:
             df['time'] = df[time_col]
         
         # Convert time to numeric if it's not already
-        if df['time'].dtype == 'object':
+        # Check for non-numeric dtype (covers both 'object' and pandas StringDtype)
+        if not pd.api.types.is_numeric_dtype(df['time']):
             try:
                 # Try parsing as time string first (legacy WHOI format)
                 parsed_time = self._parse_time_string(df['time'], file_type)
@@ -687,7 +688,7 @@ class NavigationDataMerger:
             if col in df.columns:
                 try:
                     # Check if column is already numeric
-                    if df[col].dtype in ['int64', 'float64']:
+                    if pd.api.types.is_numeric_dtype(df[col]):
                         continue
                     
                     # Convert to numeric, handling potential hex values or other formats
@@ -845,6 +846,9 @@ class NavigationDataMerger:
         # Post-process the merged data
         merged_df = self._post_process_merged_data(merged_df)
         
+        if merged_df is None:
+            raise ValueError("Merge produced no valid data — all time values may be null or incompatible")
+        
         self.log_message(f"\n=== Merge Complete ===")
         self.log_message(f"Final dataset: {len(merged_df)} records")
         self.log_message(f"Available columns: {list(merged_df.columns)}")
@@ -982,6 +986,10 @@ class NavigationDataMerger:
     
     def _post_process_merged_data(self, df):
         """Post-process merged navigation data"""
+        if df is None:
+            self.log_message("Warning: _post_process_merged_data received None — skipping post-processing")
+            return None
+
         # Create datetime column from time
         df = self._create_datetime_column(df)
         
@@ -1091,15 +1099,41 @@ class NavigationDataMerger:
         
         # Common navigation file extensions
         nav_extensions = ['.txt', '.csv', '.dat', '.log', '.nav', '.phins']
+
+        # Subdirectory names to skip — these contain config, raw bags, or system files
+        # rather than exported navigation data. Comparison is case-insensitive.
+        skip_dirs = frozenset({
+            'config', 'bags', 'missions', 'temp', 'logs',
+        })
         
-        # Find all potential navigation files
+        # Find all potential navigation files, recursing into subdirectories but
+        # pruning known non-nav folders so we don't pick up ADCP config files,
+        # MCAP bags, system logs, etc.
         potential_files = []
         for root, dirs, files in os.walk(directory_path):
+            # Prune dirs in-place so os.walk won't descend into them
+            dirs[:] = [d for d in dirs if d.lower() not in skip_dirs]
             for file in files:
                 file_lower = file.lower()
                 if any(file_lower.endswith(ext) for ext in nav_extensions):
                     file_path = os.path.join(root, file)
                     potential_files.append(file_path)
+
+        # Sort so files in "export"-style subdirectories (EXPORTED, export, nav,
+        # navigation, output) are processed before files in other subdirectories.
+        # Top-level files (depth == 0) are always first.
+        norm_root = os.path.normpath(directory_path)
+        export_dirs = frozenset({'exported', 'export', 'nav', 'navigation', 'output'})
+
+        def _file_priority(path):
+            parent = os.path.normpath(os.path.dirname(path))
+            if parent == norm_root:
+                return 0  # flat / top-level — highest priority
+            if os.path.basename(parent).lower() in export_dirs:
+                return 1  # recognised export subdirectory
+            return 2      # other subdirectory
+
+        potential_files.sort(key=_file_priority)
         
         log_message(f"Found {len(potential_files)} potential navigation files")
         
