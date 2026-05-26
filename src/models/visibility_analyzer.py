@@ -789,7 +789,9 @@ class VisibilityAnalyzer:
             return False, {}
 
     def create_visibility_chart(self, csv_path: str, output_folder: str, file_prefix: str = "Image_") -> Optional[str]:
-        """Create an enhanced colorful visibility distribution chart with example thumbnails"""
+        """Create an enhanced colorful visibility distribution chart with example thumbnails.
+        Accepts either the master Image_Metrics.csv or the legacy Visibility_Results.csv.
+        """
         try:
             if not self._plt or not self._cv2:
                 self.log_message("Required libraries not available for chart creation")
@@ -800,6 +802,17 @@ class VisibilityAnalyzer:
             matplotlib.use('Agg')
                 
             df = self._pd.read_csv(csv_path)
+
+            # Normalize column names: support both master CSV and legacy visibility CSV formats
+            col_rename = {}
+            if 'image' in df.columns and 'filename' not in df.columns:
+                col_rename['image'] = 'filename'
+            if 'image_path' in df.columns and 'file_path' not in df.columns:
+                col_rename['image_path'] = 'file_path'
+            if 'confidence' in df.columns and 'visibility_confidence' not in df.columns:
+                col_rename['confidence'] = 'visibility_confidence'
+            if col_rename:
+                df = df.rename(columns=col_rename)
             
             # Define color scheme - vibrant colors for each category
             color_map = {
@@ -860,17 +873,17 @@ class VisibilityAnalyzer:
                 
                 if len(category_images) > 0:
                     # Sort by confidence and get the highest confidence image
-                    category_images_sorted = category_images.sort_values('confidence', ascending=False)
+                    category_images_sorted = category_images.sort_values('visibility_confidence', ascending=False)
                     best_image = category_images_sorted.iloc[0]
                     
                     # Try to get the image path from the CSV first
                     image_path = None
-                    if 'image_path' in best_image and self._pd.notna(best_image['image_path']):
-                        image_path = best_image['image_path']
+                    if 'file_path' in best_image and self._pd.notna(best_image['file_path']):
+                        image_path = best_image['file_path']
                         self.log_message(f"Using path from CSV for {category}: {image_path}")
                     else:
                         # Fallback: search for the image
-                        sample_image_name = best_image['image']
+                        sample_image_name = best_image['filename']
                         self.log_message(f"Searching for {category} thumbnail: {sample_image_name}")
                         
                         # Search in common locations relative to output folder
@@ -900,7 +913,7 @@ class VisibilityAnalyzer:
                             if img is not None:
                                 img_rgb = self._cv2.cvtColor(img, self._cv2.COLOR_BGR2RGB)
                                 ax.imshow(img_rgb)
-                                confidence_pct = best_image['confidence'] * 100
+                                confidence_pct = best_image['visibility_confidence'] * 100
                                 ax.set_title(f"{category.title()}\nConfidence: {confidence_pct:.1f}%", 
                                            fontsize=11, fontweight='bold',
                                            color=color_map.get(category, '#000000'),
@@ -936,7 +949,95 @@ class VisibilityAnalyzer:
             self.log_message(f"Error creating visibility chart: {e}")
             self.log_message(traceback.format_exc())
             return None
-        
+
+    def create_good_data_by_altitude_chart(self, csv_path: str, output_folder: str, file_prefix: str = "Image_") -> Optional[str]:
+        """Create a bar chart showing percentage of good-quality images per 1m altitude bin.
+        'Good data' is defined as Excellent, Good, or Fair visibility.
+        Altitude bins are limited to 4–15 m.
+        Requires the master CSV to have both 'altitude' and 'visibility' columns.
+        """
+        try:
+            if not self._plt or not self._pd or not self._np:
+                self.log_message("Required libraries not available for altitude chart creation")
+                return None
+
+            import matplotlib
+            matplotlib.use('Agg')
+
+            df = self._pd.read_csv(csv_path)
+
+            if 'altitude' not in df.columns or 'visibility' not in df.columns:
+                self.log_message("'altitude' or 'visibility' column not found — skipping good-data-by-altitude chart")
+                return None
+
+            # Work only with rows that have both altitude and visibility
+            df_valid = df.dropna(subset=['altitude', 'visibility']).copy()
+            df_valid['altitude'] = self._pd.to_numeric(df_valid['altitude'], errors='coerce')
+            df_valid = df_valid.dropna(subset=['altitude'])
+
+            good_categories = {'excellent', 'good', 'fair'}
+
+            # Restrict to 4 m ≤ altitude < 15 m
+            df_range = df_valid[(df_valid['altitude'] >= 4) & (df_valid['altitude'] < 15)]
+
+            if len(df_range) == 0:
+                self.log_message("No data in altitude range 4–15 m — skipping good-data-by-altitude chart")
+                return None
+
+            # Build 1 m bins: [4,5), [5,6), ..., [14,15)
+            bin_edges = list(range(4, 16))
+            bin_labels = [f"{b}m" for b in range(4, 15)]
+
+            df_range = df_range.copy()
+            df_range['alt_bin'] = self._pd.cut(
+                df_range['altitude'], bins=bin_edges, labels=bin_labels, right=False
+            )
+
+            rows = []
+            for label in bin_labels:
+                bin_data = df_range[df_range['alt_bin'] == label]
+                total = len(bin_data)
+                if total > 0:
+                    good_count = bin_data['visibility'].isin(good_categories).sum()
+                    pct = (good_count / total) * 100
+                    rows.append({'bin': label, 'pct_good': pct, 'total': total})
+
+            if not rows:
+                self.log_message("No altitude bins contained data — skipping good-data-by-altitude chart")
+                return None
+
+            results_df = self._pd.DataFrame(rows)
+
+            fig, ax = self._plt.subplots(figsize=(10, 6))
+
+            bar_color = '#5B9BD5'  # Steel blue matching reference figure
+            ax.bar(range(len(results_df)), results_df['pct_good'],
+                   color=bar_color, edgecolor='none', width=0.6)
+
+            ax.set_xlabel('AUV Altitude (m)', fontsize=12)
+            ax.set_ylabel('Percent of Good Data (%)', fontsize=12)
+            ax.set_title('Good Data by Altitude', fontsize=14, fontweight='bold')
+            ax.set_xticks(range(len(results_df)))
+            ax.set_xticklabels(results_df['bin'], fontsize=11)
+            ax.set_ylim(0, 100)
+            ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+            ax.set_axisbelow(True)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            self._plt.tight_layout()
+            chart_path = os.path.join(output_folder, f"{file_prefix}Good_Data_By_Altitude.png")
+            self._plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
+            self._plt.close()
+
+            self.log_message(f"Good data by altitude chart created: {chart_path}")
+            return chart_path
+
+        except Exception as e:
+            self.log_message(f"Error creating good-data-by-altitude chart: {e}")
+            self.log_message(traceback.format_exc())
+            return None
+
     def export_visibility_metrics(self, output_path: str, analysis_results: Dict, file_prefix: str = "Image_") -> None:
         """
         Export visibility analysis metrics to a text file
@@ -1097,7 +1198,7 @@ class VisibilityAnalyzer:
             if success and results:
                 # Update the master CSV with visibility results
                 self.log_message("Updating master CSV with visibility results...")
-                self._update_master_csv_with_visibility(csv_path, results)
+                self._update_master_csv_with_visibility(csv_path, results, output_folder, file_prefix)
                 
             return success
             
@@ -1107,13 +1208,17 @@ class VisibilityAnalyzer:
             self.log_message(traceback.format_exc())
             return False
     
-    def _update_master_csv_with_visibility(self, csv_path: str, results: Dict) -> None:
+    def _update_master_csv_with_visibility(self, csv_path: str, results: Dict,
+                                             output_folder: str = "",
+                                             file_prefix: str = "Image_") -> None:
         """
-        Update the master CSV file with visibility analysis results
-        
+        Update the master CSV file with visibility analysis results and regenerate charts.
+
         Args:
             csv_path: Path to the master CSV file
             results: Results dictionary from analyze_images method
+            output_folder: Directory where chart outputs should be saved
+            file_prefix: Filename prefix for output charts
         """
         try:
             # Load the master CSV
@@ -1160,6 +1265,22 @@ class VisibilityAnalyzer:
 
             df.to_csv(csv_path, index=False)
             self.log_message(f"✓ Master CSV updated with visibility results: {csv_path}")
+
+            # Regenerate charts from the updated master CSV
+            if output_folder and self._plt:
+                try:
+                    chart_path = self.create_visibility_chart(csv_path, output_folder, file_prefix)
+                    if chart_path:
+                        self.log_message(f"✓ Visibility chart updated from master CSV: {chart_path}")
+                except Exception as chart_err:
+                    self.log_message(f"Warning: Could not create visibility chart from master CSV: {chart_err}")
+
+                try:
+                    alt_chart_path = self.create_good_data_by_altitude_chart(csv_path, output_folder, file_prefix)
+                    if alt_chart_path:
+                        self.log_message(f"✓ Good data by altitude chart created: {alt_chart_path}")
+                except Exception as alt_err:
+                    self.log_message(f"Warning: Could not create altitude chart: {alt_err}")
 
         except Exception as e:
             self.log_message(f"Error updating master CSV with visibility results: {e}")
