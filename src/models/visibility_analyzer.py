@@ -1016,7 +1016,6 @@ class VisibilityAnalyzer:
 
             ax.set_xlabel('AUV Altitude (m)', fontsize=12)
             ax.set_ylabel('Percent of Good Data (%)', fontsize=12)
-            ax.set_title('Good Data by Altitude', fontsize=14, fontweight='bold')
             ax.set_xticks(range(len(results_df)))
             ax.set_xticklabels(results_df['bin'], fontsize=11)
             ax.set_ylim(0, 100)
@@ -1035,6 +1034,235 @@ class VisibilityAnalyzer:
 
         except Exception as e:
             self.log_message(f"Error creating good-data-by-altitude chart: {e}")
+            self.log_message(traceback.format_exc())
+            return None
+
+    def create_time_by_altitude_chart(self, csv_path: str, output_folder: str, file_prefix: str = "Image_") -> Optional[str]:
+        """Create a bar chart of percent of total dive time spent in each 1m altitude bin.
+        Uses the same bins as the good-data chart: [4,5), [5,6), ..., [14,15).
+        Percentages are normalized by the full dive (all rows with valid altitude),
+        not by the subset of rows that fall into the plotted bins.
+        """
+        try:
+            if not self._plt or not self._pd:
+                self.log_message("Required libraries not available for time-by-altitude chart creation")
+                return None
+
+            import matplotlib
+            matplotlib.use('Agg')
+
+            df = self._pd.read_csv(csv_path)
+
+            if 'altitude' not in df.columns:
+                self.log_message("'altitude' column not found — skipping time-by-altitude chart")
+                return None
+
+            # Full-dive denominator: all rows with valid numeric altitude
+            df_valid = df.copy()
+            df_valid['altitude'] = self._pd.to_numeric(df_valid['altitude'], errors='coerce')
+            df_valid = df_valid.dropna(subset=['altitude'])
+
+            total_dive_count = len(df_valid)
+            if total_dive_count == 0:
+                self.log_message("No valid altitude data found — skipping time-by-altitude chart")
+                return None
+
+            # Same bins as good-data-by-altitude chart
+            bin_edges = list(range(4, 16))
+            bin_labels = [f"{b}m" for b in range(4, 15)]
+
+            df_valid = df_valid.copy()
+            df_valid['alt_bin'] = self._pd.cut(
+                df_valid['altitude'], bins=bin_edges, labels=bin_labels, right=False
+            )
+
+            rows = []
+            for label in bin_labels:
+                bin_count = int((df_valid['alt_bin'] == label).sum())
+                pct_dive_time = (bin_count / total_dive_count) * 100
+                rows.append({'bin': label, 'pct_dive_time': pct_dive_time, 'count': bin_count})
+
+            results_df = self._pd.DataFrame(rows)
+
+            fig, ax = self._plt.subplots(figsize=(10, 6))
+
+            bar_color = '#2E8B57'  # Sea green
+            ax.bar(
+                range(len(results_df)),
+                results_df['pct_dive_time'],
+                color=bar_color,
+                edgecolor='none',
+                width=0.6
+            )
+
+            ax.set_xlabel('AUV Altitude (m)', fontsize=12)
+            ax.set_ylabel('Percent of Dive Time (%)', fontsize=12)
+            ax.set_xticks(range(len(results_df)))
+            ax.set_xticklabels(results_df['bin'], fontsize=11)
+            ax.set_ylim(0, 100)
+            ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+            ax.set_axisbelow(True)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            self._plt.tight_layout()
+            chart_path = os.path.join(output_folder, f"{file_prefix}Dive_Time_By_Altitude.png")
+            self._plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
+            self._plt.close()
+
+            self.log_message(
+                f"Dive time by altitude chart created: {chart_path} "
+                f"(denominator={total_dive_count} valid-altitude rows)"
+            )
+            return chart_path
+
+        except Exception as e:
+            self.log_message(f"Error creating time-by-altitude chart: {e}")
+            self.log_message(traceback.format_exc())
+            return None
+
+    def create_altitude_composite_chart(self, csv_path: str, output_folder: str, file_prefix: str = "Image_") -> Optional[str]:
+        """Create a composite chart showing both good-data % and dive-time % by altitude bin.
+
+        Visual design:
+        - Bars: percent good data in each bin (fair/good/excellent)
+        - Line + markers: percent of total dive time in each bin
+        """
+        try:
+            if not self._plt or not self._pd:
+                self.log_message("Required libraries not available for composite altitude chart creation")
+                return None
+
+            import matplotlib
+            matplotlib.use('Agg')
+
+            df = self._pd.read_csv(csv_path)
+
+            if 'altitude' not in df.columns:
+                self.log_message("'altitude' column not found — skipping altitude composite chart")
+                return None
+
+            bin_edges = list(range(4, 16))
+            bin_labels = [f"{b}m" for b in range(4, 15)]
+            good_categories = {'excellent', 'good', 'fair'}
+
+            # --- Dive-time metric (denominator: full dive valid-altitude rows) ---
+            df_alt = df.copy()
+            df_alt['altitude'] = self._pd.to_numeric(df_alt['altitude'], errors='coerce')
+            df_alt = df_alt.dropna(subset=['altitude'])
+
+            total_dive_count = len(df_alt)
+            if total_dive_count == 0:
+                self.log_message("No valid altitude data found — skipping altitude composite chart")
+                return None
+
+            df_alt['alt_bin'] = self._pd.cut(
+                df_alt['altitude'], bins=bin_edges, labels=bin_labels, right=False
+            )
+
+            # --- Good-data metric (denominator: rows per bin with visibility + altitude) ---
+            has_visibility = 'visibility' in df.columns
+            if has_visibility:
+                df_vis = df.dropna(subset=['altitude', 'visibility']).copy()
+                df_vis['altitude'] = self._pd.to_numeric(df_vis['altitude'], errors='coerce')
+                df_vis = df_vis.dropna(subset=['altitude'])
+                df_vis['alt_bin'] = self._pd.cut(
+                    df_vis['altitude'], bins=bin_edges, labels=bin_labels, right=False
+                )
+            else:
+                df_vis = self._pd.DataFrame(columns=['alt_bin', 'visibility'])
+
+            rows = []
+            for label in bin_labels:
+                dive_bin_count = int((df_alt['alt_bin'] == label).sum())
+                pct_dive_time = (dive_bin_count / total_dive_count) * 100
+
+                vis_bin = df_vis[df_vis['alt_bin'] == label]
+                vis_total = len(vis_bin)
+                if vis_total > 0:
+                    good_count = int(vis_bin['visibility'].isin(good_categories).sum())
+                    pct_good = (good_count / vis_total) * 100
+                else:
+                    pct_good = None
+
+                rows.append({
+                    'bin': label,
+                    'pct_dive_time': pct_dive_time,
+                    'pct_good': pct_good,
+                    'dive_count': dive_bin_count,
+                    'vis_count': vis_total
+                })
+
+            results_df = self._pd.DataFrame(rows)
+
+            fig, ax = self._plt.subplots(figsize=(11, 6.5))
+            x_pos = list(range(len(results_df)))
+
+            # Bars for good-data percentage
+            good_series = results_df['pct_good']
+            good_bar_values = good_series.fillna(0)
+            ax.bar(
+                x_pos,
+                good_bar_values,
+                color='#0B3C5D',
+                alpha=0.92,
+                edgecolor='#001A2D',
+                linewidth=0.8,
+                width=0.68,
+                label='Good Data (%)'
+            )
+
+            # Line + markers for dive-time percentage
+            ax.plot(
+                x_pos,
+                results_df['pct_dive_time'],
+                color='#F39C12',
+                linewidth=2.8,
+                marker='o',
+                markersize=6.5,
+                markerfacecolor='#FDE3A7',
+                markeredgecolor='#B9770E',
+                markeredgewidth=1.6,
+                label='Dive Time Share (%)'
+            )
+
+            # Highlight bins with no visibility support for good-data metric
+            missing_idx = [i for i, v in enumerate(good_series) if self._pd.isna(v)]
+            if missing_idx:
+                ax.scatter(
+                    missing_idx,
+                    [0] * len(missing_idx),
+                    marker='x',
+                    s=55,
+                    color='#7F1D1D',
+                    linewidths=1.8,
+                    label='No visibility rows in bin'
+                )
+
+            ax.set_xlabel('AUV Altitude (m)', fontsize=12)
+            ax.set_ylabel('Percent (%)', fontsize=12)
+            ax.set_xticks(x_pos)
+            ax.set_xticklabels(results_df['bin'], fontsize=11)
+            ax.set_ylim(0, 100)
+            ax.yaxis.grid(True, linestyle='--', alpha=0.45)
+            ax.set_axisbelow(True)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.legend(loc='upper right')
+
+            self._plt.tight_layout()
+            chart_path = os.path.join(output_folder, f"{file_prefix}Altitude_Composite.png")
+            self._plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
+            self._plt.close()
+
+            self.log_message(
+                f"Altitude composite chart created: {chart_path} "
+                f"(dive denominator={total_dive_count} valid-altitude rows)"
+            )
+            return chart_path
+
+        except Exception as e:
+            self.log_message(f"Error creating altitude composite chart: {e}")
             self.log_message(traceback.format_exc())
             return None
 
@@ -1281,6 +1509,20 @@ class VisibilityAnalyzer:
                         self.log_message(f"✓ Good data by altitude chart created: {alt_chart_path}")
                 except Exception as alt_err:
                     self.log_message(f"Warning: Could not create altitude chart: {alt_err}")
+
+                try:
+                    time_chart_path = self.create_time_by_altitude_chart(csv_path, output_folder, file_prefix)
+                    if time_chart_path:
+                        self.log_message(f"✓ Dive time by altitude chart created: {time_chart_path}")
+                except Exception as time_err:
+                    self.log_message(f"Warning: Could not create dive-time-by-altitude chart: {time_err}")
+
+                try:
+                    composite_chart_path = self.create_altitude_composite_chart(csv_path, output_folder, file_prefix)
+                    if composite_chart_path:
+                        self.log_message(f"✓ Altitude composite chart created: {composite_chart_path}")
+                except Exception as composite_err:
+                    self.log_message(f"Warning: Could not create altitude composite chart: {composite_err}")
 
         except Exception as e:
             self.log_message(f"Error updating master CSV with visibility results: {e}")

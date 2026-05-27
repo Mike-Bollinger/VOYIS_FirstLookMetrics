@@ -1208,6 +1208,9 @@ class NavPlotter:
         # Create comprehensive depth vs bathymetry comparison plot
         self._create_depth_bathymetry_comparison(df, output_dir, log_callback)
         
+        # Create altitude-colored depth vs bathymetry plot
+        self._create_depth_bathymetry_altitude_colored(df, output_dir, log_callback)
+        
         log_message("All navigation plots created successfully")
     
     def _create_comprehensive_timeseries_plot(self, df, output_dir, available_motion_cols, log_callback=None):
@@ -2061,6 +2064,114 @@ class NavPlotter:
         plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
         plt.close()
         log_message(f"Saved depth vs bathymetry time series: {plot_path}")
+
+    def _create_depth_bathymetry_altitude_colored(self, df, output_dir, log_callback=None):
+        """Create depth vs bathymetry plot with vehicle depth points colored by altitude.
+        Vehicle depth: red if altitude < 4m, black otherwise.
+        Bathymetry: dark green.
+        """
+        def log_message(message):
+            print(message)
+            if log_callback:
+                log_callback(message)
+        
+        # Check if we have the required data
+        if 'depth' not in df.columns:
+            log_message("Skipping altitude-colored depth plot - missing depth column")
+            return
+        
+        log_message("Creating altitude-colored depth vs bathymetry plot...")
+        
+        # Create figure
+        plt.figure(figsize=(15, 8), facecolor='white')
+        
+        # Determine time axis
+        if 'datetime' in df.columns and not df['datetime'].isna().all():
+            x_data = df['datetime']
+            x_label = 'Mission Time'
+            use_datetime = True
+        else:
+            x_data = df.index
+            x_label = 'Time Index'
+            use_datetime = False
+        
+        # Plot vehicle depth with altitude-based coloring
+        if 'altitude' in df.columns:
+            valid_depth_mask = df['depth'].notna() & df['altitude'].notna()
+            
+            if valid_depth_mask.any():
+                depth_values = df.loc[valid_depth_mask, 'depth']
+                altitude_values = df.loc[valid_depth_mask, 'altitude']
+                x_subset = x_data[valid_depth_mask]
+                
+                # Create color array: red if altitude < 4m, black otherwise
+                colors = ['red' if alt < 4 else 'black' for alt in altitude_values]
+                
+                # Plot as scatter for altitude coloring
+                scatter = plt.scatter(x_subset, depth_values, c=colors, s=20, alpha=0.6, label='Vehicle Depth')
+                
+                # Plot bathymetry in dark green
+                bathymetry = depth_values + altitude_values
+                plt.scatter(x_subset, bathymetry, c='darkgreen', s=20, alpha=0.6, 
+                           label='Vehicle Bathymetry (Depth + Altitude)')
+                
+                # Add statistics
+                depth_stats = depth_values.describe()
+                bathy_stats = bathymetry.describe()
+                altitude_stats = altitude_values.describe()
+                
+                # Count red vs black points
+                red_count = sum(1 for alt in altitude_values if alt < 4)
+                black_count = len(altitude_values) - red_count
+                
+                stats_text = (f'Depth Stats (n={len(depth_values)}):\n'
+                             f'  Mean: {depth_stats["mean"]:.1f}m, Std: {depth_stats["std"]:.1f}m\n'
+                             f'  Range: [{depth_stats["min"]:.1f}, {depth_stats["max"]:.1f}]m\n\n'
+                             f'Bathymetry Stats (n={len(bathymetry)}):\n'
+                             f'  Mean: {bathy_stats["mean"]:.1f}m, Std: {bathy_stats["std"]:.1f}m\n'
+                             f'  Range: [{bathy_stats["min"]:.1f}, {bathy_stats["max"]:.1f}]m\n\n'
+                             f'Altitude Stats (n={len(altitude_stats)}):\n'
+                             f'  Mean: {altitude_stats["mean"]:.1f}m, Std: {altitude_stats["std"]:.1f}m\n'
+                             f'  Altitude < 4m: {red_count} points (red)\n'
+                             f'  Altitude >= 4m: {black_count} points (black)')
+                
+                # Formatting and labels
+                plt.xlabel(x_label)
+                plt.ylabel('Depth/Bathymetry (m)')
+                plt.title('Vehicle Depth vs Bathymetry Time Series (Altitude-Colored)\n(Red = altitude < 4m, Black = altitude >= 4m)')
+                
+                # Add custom legend
+                from matplotlib.patches import Patch
+                legend_elements = [
+                    Patch(facecolor='red', alpha=0.6, label='Vehicle Depth (Altitude < 4m)'),
+                    Patch(facecolor='black', alpha=0.6, label='Vehicle Depth (Altitude >= 4m)'),
+                    Patch(facecolor='darkgreen', alpha=0.6, label='Vehicle Bathymetry (Depth + Altitude)')
+                ]
+                plt.legend(handles=legend_elements, loc='upper left')
+                plt.grid(True, alpha=0.3)
+                
+                # Add statistics text box
+                plt.text(0.98, 0.98, stats_text, transform=plt.gca().transAxes,
+                        verticalalignment='top', horizontalalignment='right',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9, edgecolor='gray'),
+                        fontsize=9, family='monospace')
+                
+                # Format time axis if using datetime
+                if use_datetime:
+                    self._format_datetime_axis(plt.gca(), x_data, df)
+                
+                # Invert y-axis so depth increases downward
+                plt.gca().invert_yaxis()
+                
+                # Save the plot
+                plot_path = os.path.join(output_dir, f"{self.file_prefix}Depth_vs_Bathymetry_Altitude_Colored.png")
+                plt.savefig(plot_path, facecolor='white', bbox_inches='tight', dpi=300)
+                plt.close()
+                log_message(f"Saved altitude-colored depth vs bathymetry plot: {plot_path}")
+            else:
+                log_message("No valid depth and altitude data pairs found for altitude-colored plot")
+        else:
+            log_message("Skipping altitude-colored depth plot - missing altitude column")
 
     def _calculate_crab_index(self, df, window_size=5, log_callback=None):
         """
