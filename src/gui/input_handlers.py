@@ -319,3 +319,69 @@ class InputHandlers:
                     self.log_message("Warning: No navigation files found in selected directory")
             except Exception as e:
                 self.log_message(f"Error scanning navigation directory: {str(e)}")
+            
+            # Auto-detect NavData file for imagery processing
+            self._detect_and_update_navdata_file(directory_path)
+
+    def _detect_and_update_navdata_file(self, directory_path):
+        """Recursively search for a Vehicle NavData text file in the given directory.
+        Updates nav_path and the enunciator label accordingly."""
+        navdata_file = self.find_navdata_file(directory_path)
+        
+        if navdata_file:
+            self.nav_path.set(navdata_file)
+            filename = os.path.basename(navdata_file)
+            status_text = f"✓ Found: {filename}"
+            self.log_message(f"Vehicle NavData file detected: {navdata_file}")
+            if hasattr(self, 'nav_data_status_var'):
+                self.nav_data_status_var.set(status_text)
+            if hasattr(self, 'nav_data_status_label'):
+                self.nav_data_status_label.configure(foreground='green')
+        else:
+            self.nav_path.set("")
+            status_text = "⚠ NavData file not found — imagery will process without vehicle nav"
+            self.log_message("Warning: No Vehicle NavData file found in navigation directory")
+            if hasattr(self, 'nav_data_status_var'):
+                self.nav_data_status_var.set(status_text)
+            if hasattr(self, 'nav_data_status_label'):
+                self.nav_data_status_label.configure(foreground='darkorange')
+
+    def find_navdata_file(self, directory_path):
+        """Recursively search a directory for a Vehicle NavData text file.
+        
+        Matches filenames like:
+          - DIVE020_NAV.txt
+          - DIVE020_Navdata.txt
+          - DIVE020_Veh_Nav.txt
+          - Any *NAV*.txt or *Navdata*.txt variant (case-insensitive)
+        
+        Returns the path to the first match found, or None.
+        """
+        nav_patterns = [
+            '*_NAV.txt',
+            '*_NAV_*.txt',
+            '*NAV*.txt',
+            '*Navdata*.txt',
+            '*navdata*.txt',
+            '*_Veh_Nav*.txt',
+            '*VehNav*.txt',
+        ]
+        
+        # Walk the directory tree
+        for root, dirs, files in os.walk(directory_path):
+            # Sort to get deterministic ordering; prefer shallower paths naturally
+            for filename in sorted(files):
+                lower = filename.lower()
+                # Skip files that are clearly not nav data (binary, images, etc.)
+                if not lower.endswith('.txt') and not lower.endswith('.csv'):
+                    continue
+                # Match on known patterns (case-insensitive)
+                if (('nav' in lower or 'navdata' in lower)
+                        and ('_nav' in lower or 'navdata' in lower or 'veh_nav' in lower)
+                        and (lower.endswith('.txt') or lower.endswith('.csv'))):
+                    # Exclude files that look like state or phins data
+                    if any(excl in lower for excl in ['nav_state', 'navstate', 'phins', 'adcp', 'state', 'gps', 'ctd', 'bathy']):
+                        continue
+                    return os.path.join(root, filename)
+        
+        return None

@@ -86,10 +86,17 @@ class AppWindow(UIComponents, ProcessingController):
         self.batch_var = tk.BooleanVar()  # Add this for ProcessingController compatibility
         
         # Turbidity plotting variable
-        self.turbidity_plot_var = tk.BooleanVar(value=False)
+        self.turbidity_plot_var = tk.BooleanVar(value=True)
+
+        # NavData file auto-detection status (for imagery enunciator)
+        self.nav_data_status_var = tk.StringVar(value="Set Navigation Directory to auto-detect")
+
+        # Turbidity Data Merge (imagery module)
+        self.turbidity_merge_var = tk.BooleanVar(value=True)
+        self.turb_bag_dir_status_var = tk.StringVar(value="Set Navigation Directory to auto-detect")
 
         # Nav track to shapefile variable
-        self.nav_to_shp_var = tk.BooleanVar(value=False)
+        self.nav_to_shp_var = tk.BooleanVar(value=True)
 
         # Processing function variables
         self.lls_processing_var = tk.BooleanVar(value=True)
@@ -460,31 +467,73 @@ class AppWindow(UIComponents, ProcessingController):
         )
         self.all_checkbox.grid(row=0, column=0, sticky='w')
         
-        # Individual function checkboxes
-        checkboxes = [
-            ("Summary Metrics", self.basic_metrics_var),
-            ("Location Map", self.location_map_var),
-            ("Altitude Histogram", self.histogram_var),
-            ("Footprint Map", self.footprint_map_var),
-            ("Visibility Analysis", self.visibility_analyzer_var),
-            ("Highlight Selection", self.highlight_selector_var)
-        ]
-        
+        # Individual function checkboxes - built manually so Turbidity Merge can be
+        # inserted between Altitude Histogram and Footprint Map with an enunciator row.
+        imagery_section.columnconfigure(1, weight=1)
         current_row = 1
-        for text, var in checkboxes:
-            checkbox = ttk.Checkbutton(
-                imagery_section, text=text, 
-                variable=var, 
+
+        for text, var in [
+            ("Summary Metrics", self.basic_metrics_var),
+            ("Location Map",    self.location_map_var),
+            ("Altitude Histogram", self.histogram_var),
+        ]:
+            ttk.Checkbutton(
+                imagery_section, text=text, variable=var,
                 command=self.update_all_checkbox
-            )
-            checkbox.grid(row=current_row, column=0, sticky='w')
-            
-            # Special handling for visibility analyzer
-            if text == "Visibility Analysis":
-                self.create_visibility_options(imagery_section, current_row)
-                current_row += 2  # Skip the next row for visibility options
-            else:
-                current_row += 1
+            ).grid(row=current_row, column=0, sticky='w')
+            current_row += 1
+
+        # ── Turbidity Data Merge ──────────────────────────────────────────────
+        self.turbidity_merge_checkbox = ttk.Checkbutton(
+            imagery_section, text="Turbidity Data Merge",
+            variable=self.turbidity_merge_var,
+            command=self.toggle_turbidity_merge_options
+        )
+        self.turbidity_merge_checkbox.grid(row=current_row, column=0, sticky='w')
+        current_row += 1
+
+        # Enunciator (hidden until checkbox is checked)
+        self.turb_merge_frame = ttk.Frame(imagery_section)
+        self.turb_merge_frame.grid(row=current_row, column=0, columnspan=3,
+                                   sticky='ew', padx=(22, 0), pady=(0, 2))
+        self.turb_merge_frame.columnconfigure(1, weight=1)
+        ttk.Label(self.turb_merge_frame, text="Bag Dir:").grid(row=0, column=0, sticky='w')
+        self.turb_bag_dir_label = ttk.Label(
+            self.turb_merge_frame,
+            textvariable=self.turb_bag_dir_status_var,
+            foreground='gray',
+            wraplength=320, anchor='w', justify='left'
+        )
+        self.turb_bag_dir_label.grid(row=0, column=1, sticky='ew', padx=5)
+        self._turb_enunciator_row = current_row
+        self.turb_merge_frame.grid_remove()  # Initially hidden
+        current_row += 1
+        # ─────────────────────────────────────────────────────────────────────
+
+        ttk.Checkbutton(
+            imagery_section, text="Footprint Map",
+            variable=self.footprint_map_var,
+            command=self.update_all_checkbox
+        ).grid(row=current_row, column=0, sticky='w')
+        current_row += 1
+
+        ttk.Checkbutton(
+            imagery_section, text="Visibility Analysis",
+            variable=self.visibility_analyzer_var,
+            command=self.update_all_checkbox
+        ).grid(row=current_row, column=0, sticky='w')
+        self.create_visibility_options(imagery_section, current_row)
+        current_row += 2  # Skip the visibility options row
+
+        ttk.Checkbutton(
+            imagery_section, text="Highlight Selection",
+            variable=self.highlight_selector_var,
+            command=self.update_all_checkbox
+        ).grid(row=current_row, column=0, sticky='w')
+        current_row += 1
+
+        # Show turbidity enunciator if checkbox is already checked on startup
+        self.toggle_turbidity_merge_options()
 
     def create_visibility_options(self, parent, visibility_row):
         """Create visibility analyzer options"""
@@ -686,6 +735,91 @@ class AppWindow(UIComponents, ProcessingController):
         if directory:
             self.nav_directory_path.set(directory)
             self.log_message(f"Selected navigation directory: {directory}")
+            # Auto-detect Vehicle NavData file for imagery processing
+            self._detect_and_update_navdata_file(directory)
+            # Detect bag files for turbidity merge
+            self._detect_bag_directory(directory)
+
+    def _detect_bag_directory(self, directory_path):
+        """Recursively locate .mcap bag files and update the turbidity enunciator."""
+        all_mcap = []
+        first_bag_dir = None
+        for root, dirs, files in os.walk(directory_path):
+            bag_files = [f for f in files if f.lower().endswith('.mcap')]
+            if bag_files:
+                if first_bag_dir is None:
+                    first_bag_dir = root
+                all_mcap.extend(bag_files)
+
+        if all_mcap:
+            rel_path = os.path.relpath(first_bag_dir, directory_path)
+            status = f"✓ {len(all_mcap)} bag file(s) in: ...{os.sep}{rel_path}"
+            color = 'green'
+        else:
+            status = "⚠ No .mcap bag files found in navigation directory"
+            color = 'darkorange'
+
+        if hasattr(self, 'turb_bag_dir_status_var'):
+            self.turb_bag_dir_status_var.set(status)
+        if hasattr(self, 'turb_bag_dir_label'):
+            self.turb_bag_dir_label.configure(foreground=color)
+
+        return first_bag_dir
+
+    def toggle_turbidity_merge_options(self):
+        """Show or hide the turbidity bag directory enunciator."""
+        if hasattr(self, 'turb_merge_frame'):
+            if self.turbidity_merge_var.get():
+                self.turb_merge_frame.grid(
+                    row=self._turb_enunciator_row, column=0, columnspan=3,
+                    sticky='ew', padx=(22, 0), pady=(0, 2)
+                )
+            else:
+                self.turb_merge_frame.grid_remove()
+
+    def _detect_and_update_navdata_file(self, directory_path):
+        """Recursively search for a Vehicle NavData text file and update the enunciator."""
+        navdata_file = self.find_navdata_file(directory_path)
+        if navdata_file:
+            self.nav_path.set(navdata_file)
+            filename = os.path.basename(navdata_file)
+            status_text = f"✓ Found: {filename}"
+            self.log_message(f"Vehicle NavData file detected: {navdata_file}")
+            if hasattr(self, 'nav_data_status_var'):
+                self.nav_data_status_var.set(status_text)
+            if hasattr(self, 'nav_data_status_label'):
+                self.nav_data_status_label.configure(foreground='green')
+        else:
+            self.nav_path.set("")
+            status_text = "⚠ NavData file not found — imagery will process without vehicle nav"
+            self.log_message("Warning: No Vehicle NavData file found in navigation directory")
+            if hasattr(self, 'nav_data_status_var'):
+                self.nav_data_status_var.set(status_text)
+            if hasattr(self, 'nav_data_status_label'):
+                self.nav_data_status_label.configure(foreground='darkorange')
+
+    def find_navdata_file(self, directory_path):
+        """Recursively search a directory for a Vehicle NavData text file.
+
+        Matches filenames like DIVE020_NAV.txt, DIVEXXX_Navdata.txt, etc.
+        Returns the path to the first match, or None.
+        """
+        for root, dirs, files in os.walk(directory_path):
+            for filename in sorted(files):
+                lower = filename.lower()
+                if not (lower.endswith('.txt') or lower.endswith('.csv')):
+                    continue
+                # Must contain 'nav' and look like a vehicle nav file
+                if not ('_nav' in lower or 'navdata' in lower or 'veh_nav' in lower):
+                    continue
+                # Exclude files that are clearly state/sensor data, not vehicle nav
+                if any(excl in lower for excl in [
+                    'nav_state', 'navstate', 'phins', 'adcp',
+                    'state', 'gpsdata', 'ctd', 'bathy'
+                ]):
+                    continue
+                return os.path.join(root, filename)
+        return None
 
     def scan_navigation_directory(self):
         """Scan the selected directory for navigation files and show preview"""
@@ -750,7 +884,7 @@ class AppWindow(UIComponents, ProcessingController):
         """Toggle all function checkboxes"""
         all_selected = self.all_var.get()
         
-        # Only toggle imagery functions, not LLS
+        # Only toggle core imagery functions (not turbidity merge — that is opt-in)
         self.basic_metrics_var.set(all_selected)
         self.location_map_var.set(all_selected)
         self.histogram_var.set(all_selected)
@@ -771,6 +905,7 @@ class AppWindow(UIComponents, ProcessingController):
             self.highlight_selector_var.get()
         ]
         
+        # turbidity_merge_var is intentionally excluded from the "All" state
         if all(imagery_functions):
             self.all_var.set(True)
         else:
@@ -937,8 +1072,9 @@ class AppWindow(UIComponents, ProcessingController):
                     f"Batch processing CSV template created at:\n{file_path}\n\n"
                     "Edit this file with your actual folder paths, then load it for batch processing.\n\n"
                     "Required: Output_folder (always required)\n"
-                    "Navigation Module: nav_directory (auto-detects all nav files)\n"
-                    "Image Analysis Module: Image_Input, dive_nav_file (optional individual nav file for legacy imagery processing)\n"
+                    "Navigation Module: nav_directory (auto-detects all nav files incl. Vehicle NavData)\n"
+                    "Image Analysis Module: Image_Input; dive_nav_file is auto-detected from nav_directory\n"
+                    "  (you may still provide dive_nav_file explicitly to override auto-detection)\n"
                     "LLS Analysis Module: LLS_Input, PhinsData_Bin_file\n"
                     "Each module can be run independently."
                 )

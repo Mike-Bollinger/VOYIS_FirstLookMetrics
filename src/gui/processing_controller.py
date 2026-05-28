@@ -397,7 +397,10 @@ class ProcessingController:
                 
                 if self.histogram_var.get():
                     processing_stages.append(("Altitude Histogram", self.process_histogram))
-                
+
+                if hasattr(self, 'turbidity_merge_var') and self.turbidity_merge_var.get():
+                    processing_stages.append(("Turbidity Data Merge", self.process_turbidity_merge))
+
                 if self.footprint_map_var.get():
                     processing_stages.append(("Footprint Map Generation", self.process_footprint_map))
                 
@@ -819,7 +822,10 @@ class ProcessingController:
             
             if self.histogram_var.get():
                 stages.append(("Altitude Histogram", self.process_histogram))
-            
+
+            if hasattr(self, 'turbidity_merge_var') and self.turbidity_merge_var.get():
+                stages.append(("Turbidity Data Merge", self.process_turbidity_merge))
+
             if self.footprint_map_var.get():
                 stages.append(("Footprint Map Generation", self.process_footprint_map))
             
@@ -975,11 +981,168 @@ class ProcessingController:
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in histogram: {e}")
 
+    def process_turbidity_merge(self, input_folder, output_folder):
+        """Merge turbidity NTU values from MCAP bag files into the Image_Metrics CSV.
+
+        Searches the navigation directory recursively for .mcap files, extracts turbidity
+        readings, then joins them to image rows in the Image_Metrics CSV by nearest
+        timestamp (±10-second tolerance).  Adds a 'turbidity_ntu' column in-place.
+        """
+        self.log_message("  └─ Running turbidity data merge...")
+
+        import re
+        import glob as _glob
+
+        # ── Locate Image_Metrics CSV ─────────────────────────────────────────
+        dive_prefix = (
+            self.dive_prefix_image
+            if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image
+            else "Image_"
+        )
+        csv_path = os.path.join(output_folder, f"{dive_prefix}Metrics.csv")
+        if not os.path.exists(csv_path):
+            candidates = _glob.glob(os.path.join(output_folder, "*Metrics.csv"))
+            if candidates:
+                csv_path = candidates[0]
+            else:
+                self.log_message("  └─ ⚠ Image_Metrics CSV not found – turbidity merge skipped")
+                return
+
+        # ── Locate navigation / bag directory ────────────────────────────────
+        nav_directory = (
+            self.nav_directory_path.get()
+            if hasattr(self, 'nav_directory_path')
+            else ""
+        )
+        if not nav_directory or not os.path.exists(nav_directory):
+            self.log_message("  └─ ⚠ Navigation directory not set – turbidity merge skipped")
+            return
+
+        try:
+            import pandas as pd
+            from src.models.turbidity_processor import TurbidityProcessor
+
+            # ── Parse turbidity from bag files ───────────────────────────────
+            processor = TurbidityProcessor(log_callback=self.log_message)
+            mcap_files = processor.find_mcap_files(nav_directory)
+
+            if not mcap_files:
+                self.log_message("  └─ ⚠ No .mcap bag files found – turbidity merge skipped")
+                return
+
+            turb_df, _ = processor._parse_all_bags(mcap_files)
+
+            if turb_df.empty:
+                self.log_message("  └─ ⚠ No turbidity messages found in bag files")
+                return
+
+            self.log_message(f"  └─ Parsed {len(turb_df):,} turbidity readings")
+
+            # ── Load Image_Metrics CSV ────────────────────────────────────────
+            img_df = pd.read_csv(csv_path)
+
+            if img_df.empty or 'datetime_original' not in img_df.columns:
+                self.log_message("  └─ ⚠ Image_Metrics CSV missing datetime_original column")
+                return
+
+            # ── Convert image EXIF timestamps to nanoseconds ──────────────────
+            def _exif_to_ns(dt_str):
+                """Parse EXIF 'YYYY:MM:DD HH:MM:SS' → UTC timestamp in nanoseconds."""
+                if not dt_str or pd.isna(dt_str):
+                    return None
+                s = str(dt_str)
+                # EXIF uses colons in date part: "2024:07:04 02:29:09"
+                m = re.match(
+                    r'(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})', s
+                )
+                if m:
+                    from datetime import datetime, timezone
+                    dt = datetime(
+                        int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                        int(m.group(4)), int(m.group(5)), int(m.group(6)),
+                        tzinfo=timezone.utc
+                    )
+                    return int(dt.timestamp() * 1e9)
+                # Fallback: try dateutil
+                try:
+                    from dateutil import parser
+                    from datetime import timezone
+                    dt = parser.parse(s)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return int(dt.timestamp() * 1e9)
+                except Exception:
+                    return None
+
+            img_df['_ts_ns'] = img_df['datetime_original'].apply(_exif_to_ns)
+            valid_ts = img_df['_ts_ns'].notna().sum()
+            self.log_message(f"  └─ {valid_ts}/{len(img_df)} images have parseable timestamps")
+
+            if valid_ts == 0:
+                self.log_message("  └─ ⚠ No parseable image timestamps – turbidity merge skipped")
+                img_df.drop(columns=['_ts_ns'], inplace=True, errors='ignore')
+                return
+
+            # ── Merge by nearest timestamp (±10 s) ───────────────────────────
+            # Keep the original DataFrame index as a column so we can map values back.
+            img_valid = (
+                img_df[img_df['_ts_ns'].notna()]
+                .copy()
+                .assign(_ts_ns=lambda d: d['_ts_ns'].astype('int64'))
+                .sort_values('_ts_ns')
+            )
+            # Preserve original index
+            img_valid_reset = img_valid.reset_index()   # 'index' col = original position
+
+            turb_for_merge = (
+                turb_df[['timestamp_ns', 'turbidity_ntu']]
+                .copy()
+                .assign(timestamp_ns=lambda d: d['timestamp_ns'].astype('int64'))
+                .sort_values('timestamp_ns')
+                .reset_index(drop=True)
+            )
+
+            merged = pd.merge_asof(
+                img_valid_reset[['index', '_ts_ns']],
+                turb_for_merge,
+                left_on='_ts_ns',
+                right_on='timestamp_ns',
+                direction='nearest',
+                tolerance=10_000_000_000   # 10 seconds in nanoseconds
+            )
+
+            matched = merged['turbidity_ntu'].notna().sum()
+            self.log_message(
+                f"  └─ Matched turbidity to {matched}/{len(merged)} images "
+                f"(tolerance = 10 s)"
+            )
+
+            # Map turbidity back to the full DataFrame using original indices
+            img_df['turbidity_ntu'] = float('nan')
+            valid_mask = merged['turbidity_ntu'].notna()
+            img_df.loc[
+                merged.loc[valid_mask, 'index'].values,
+                'turbidity_ntu'
+            ] = merged.loc[valid_mask, 'turbidity_ntu'].values
+
+            # Drop working column and save
+            img_df.drop(columns=['_ts_ns'], inplace=True, errors='ignore')
+            img_df.to_csv(csv_path, index=False)
+            self.log_message(
+                f"  └─ ✓ Turbidity column added to {os.path.basename(csv_path)} "
+                f"({matched} rows populated)"
+            )
+
+        except ImportError as e:
+            self.log_message(f"  └─ ✗ Missing dependency for turbidity merge: {e}")
+        except Exception as e:
+            self.log_message(f"  └─ ✗ Turbidity merge error: {e}")
+            self.log_message(traceback.format_exc())
+
     def process_footprint_map(self, input_folder, output_folder):
         """Process footprint map generation"""
         try:
             self.log_message("  └─ Running footprint map generation...")
-            
             if not hasattr(self, 'footprint_map') or not self.footprint_map:
                 self.log_message("  └─ ✗ Error: FootprintMap processor not initialized")
                 return
@@ -1222,6 +1385,9 @@ class ProcessingController:
         
         if self.histogram_var.get():
             stages.append(("Altitude Histogram", self.process_histogram))
+
+        if hasattr(self, 'turbidity_merge_var') and self.turbidity_merge_var.get():
+            stages.append(("Turbidity Data Merge", self.process_turbidity_merge))
         
         if self.footprint_map_var.get():
             stages.append(("Footprint Map Generation", self.process_footprint_map))
@@ -1516,6 +1682,18 @@ class ProcessingController:
                     else:
                         self.nav_path.set('')
                         self.log_message(f"Job {job_num}: ⚠ Nav file does not exist: {nav_file}")
+                elif nav_directory and os.path.exists(nav_directory):
+                    # No explicit Dive_Nav_file in CSV — try to auto-detect from nav_directory
+                    if hasattr(self, 'find_navdata_file'):
+                        auto_nav = self.find_navdata_file(nav_directory)
+                        if auto_nav:
+                            self.nav_path.set(auto_nav)
+                            self.log_message(f"Job {job_num}: Auto-detected NavData file: {os.path.basename(auto_nav)}")
+                        else:
+                            self.nav_path.set('')
+                            self.log_message(f"Job {job_num}: ⚠ No NavData file found in nav_directory")
+                    else:
+                        self.nav_path.set('')
                 else:
                     self.nav_path.set('')
             else:

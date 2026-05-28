@@ -252,7 +252,7 @@ class TurbidityProcessor:
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            fname = f"{file_prefix}turbidity_vs_time.png"
+            fname = f"{file_prefix}Turbidity_vs_Time.png"
             path  = os.path.join(output_dir, fname)
             plt.savefig(path, facecolor="white", bbox_inches="tight", dpi=200)
             plt.close(fig)
@@ -290,14 +290,14 @@ class TurbidityProcessor:
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            fname = f"{file_prefix}turbidity_vs_depth.png"
+            fname = f"{file_prefix}Turbidity_vs_Depth.png"
             path  = os.path.join(output_dir, fname)
             plt.savefig(path, facecolor="white", bbox_inches="tight", dpi=200)
             plt.close(fig)
             self.log(f"  ✓ Plot saved: {fname}")
             return path
         except Exception as e:
-            self.log(f"  ✗ turbidity_vs_depth plot failed: {e}")
+            self.log(f"  ✗ Turbidity_vs_Depth plot failed: {e}")
             self.log(traceback.format_exc())
             return None
 
@@ -332,14 +332,14 @@ class TurbidityProcessor:
             plt.xticks(rotation=30)
 
             plt.tight_layout()
-            fname = f"{file_prefix}turbidity_map.png"
+            fname = f"{file_prefix}Turbidity_Map.png"
             path  = os.path.join(output_dir, fname)
             plt.savefig(path, facecolor="white", bbox_inches="tight", dpi=200)
             plt.close(fig)
             self.log(f"  ✓ Plot saved: {fname}")
             return path
         except Exception as e:
-            self.log(f"  ✗ turbidity_map plot failed: {e}")
+            self.log(f"  ✗ Turbidity_Map plot failed: {e}")
             self.log(traceback.format_exc())
             return None
 

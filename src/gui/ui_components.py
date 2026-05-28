@@ -82,7 +82,7 @@ class UIComponents:
         # Help text for batch CSV format
         help_text = ttk.Label(
             self.batch_csv_frame, 
-            text="CSV columns: NAV_STATE_file, PHINS_INS_file, LLS_Input, PhinsData_Bin_file, Image_Input, Dive_Nav_file, Output_folder (required). Each processing module can run independently.",
+            text="CSV columns: nav_directory, NAV_STATE_file, PHINS_INS_file, LLS_Input, PhinsData_Bin_file, Image_Input, Dive_Nav_file (optional — auto-detected from nav_directory), Output_folder (required). Each module runs independently.",
             font=('TkDefaultFont', 8),
             foreground='gray'
         )
@@ -150,12 +150,17 @@ class UIComponents:
         self.input_button = ttk.Button(imagery_frame, text="Browse...", command=self.select_input_folder)
         self.input_button.grid(row=0, column=2)
         
-        # Vehicle Nav file selection
+        # NavData file enunciator (auto-detected from Navigation Directory)
         ttk.Label(imagery_frame, text="Vehicle Nav File:").grid(row=1, column=0, sticky='w')
-        self.nav_entry = ttk.Entry(imagery_frame, textvariable=self.nav_path, width=40)
-        self.nav_entry.grid(row=1, column=1, padx=5, sticky='ew')
-        self.nav_button = ttk.Button(imagery_frame, text="Browse...", command=self.select_nav_file)
-        self.nav_button.grid(row=1, column=2)
+        self.nav_data_status_label = ttk.Label(
+            imagery_frame,
+            textvariable=self.nav_data_status_var,
+            foreground='gray',
+            wraplength=350,
+            anchor='w',
+            justify='left'
+        )
+        self.nav_data_status_label.grid(row=1, column=1, columnspan=2, padx=5, sticky='ew')
         
         self.single_mode_frames.append(imagery_frame)
 
