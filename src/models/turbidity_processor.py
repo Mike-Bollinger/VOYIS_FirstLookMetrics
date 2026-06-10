@@ -1,7 +1,7 @@
 """
 Turbidity Data Processor
-Reads turbidity data from ROS2 MCAP bag files, compiles to CSV,
-and generates analysis plots.
+Reads turbidity data from ROS2 MCAP bag files and/or exported TURBIDITY.txt
+files, compiles to CSV, and generates analysis plots.
 
 Bag parsing approach (CDR struct offsets confirmed empirically):
   /r620/ros_remus/ds_msgs/turbidity   → NTU at byte offset 44 (float64 LE)
@@ -21,6 +21,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 from matplotlib.ticker import FuncFormatter
 
@@ -48,17 +49,17 @@ def _read_float64(data: bytes, offset: int) -> float | None:
 
 class TurbidityProcessor:
     """
-    Processes turbidity data from ROS2 MCAP bag files.
+    Processes turbidity data from ROS2 MCAP bag files and exported
+    TURBIDITY text files.
 
     Workflow
     --------
-    1. Recursively scan a directory for .mcap files.
-    2. Parse turbidity (NTU + timestamp) from the turbidity topic.
-    3. Parse navigation state (lat, lon, depth + timestamp) from the
-       status topic in the same bags.
-    4. Time-merge the two streams by nearest timestamp.
-    5. Export a compiled CSV.
-    6. Generate plots: Turbidity vs Time, Turbidity vs Depth,
+     1. Recursively scan a directory for .mcap files and TURBIDITY.txt files.
+     2. Parse turbidity (NTU + timestamp) and nav state (lat/lon/depth)
+         from discovered sources.
+     3. Time-merge the two streams by nearest timestamp.
+     4. Export a compiled CSV.
+     5. Generate plots: Turbidity vs Time, Turbidity vs Depth,
        Turbidity Map (lat/lon coloured by NTU using viridis).
     """
 
@@ -84,6 +85,16 @@ class TurbidityProcessor:
         mcap_files = sorted(root.rglob("*.mcap"))
         self.log(f"  Found {len(mcap_files)} .mcap file(s) under {root_dir}")
         return mcap_files
+
+    def find_turbidity_text_files(self, root_dir: str) -> list[Path]:
+        """Recursively find exported TURBIDITY.txt files under root_dir."""
+        root = Path(root_dir)
+        txt_files = sorted(
+            path for path in root.rglob("*.txt")
+            if path.name.lower() == "turbidity.txt"
+        )
+        self.log(f"  Found {len(txt_files)} TURBIDITY.txt file(s) under {root_dir}")
+        return txt_files
 
     # ── Bag parsing ───────────────────────────────────────────────────────────
 
@@ -166,6 +177,124 @@ class TurbidityProcessor:
 
         return turb_df, stat_df
 
+    def _parse_single_turbidity_text(self, txt_path: Path) -> tuple[list[dict], list[dict]]:
+        """
+        Parse one exported TURBIDITY.txt file.
+
+        Expected columns include at least:
+            mission_msecs, latitude, longitude, depth, data1
+
+        Returns
+        -------
+        turb_rows : list of {timestamp_ns, datetime_utc, turbidity_ntu}
+        stat_rows : list of {timestamp_ns, latitude, longitude, depth_m}
+        """
+        turb_rows: list[dict] = []
+        stat_rows: list[dict] = []
+
+        try:
+            with open(txt_path, "r", newline="", encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f, skipinitialspace=True)
+                required_cols = {"mission_msecs", "latitude", "longitude", "depth", "data1"}
+                header_cols = set(reader.fieldnames or [])
+                if not required_cols.issubset(header_cols):
+                    self.log(
+                        f"  [WARN] {txt_path.name} missing required columns: "
+                        f"{sorted(required_cols - header_cols)}"
+                    )
+                    return turb_rows, stat_rows
+
+                bad_rows = 0
+                for row in reader:
+                    try:
+                        mission_msecs = float(row["mission_msecs"])
+                        ts = int(round(mission_msecs * 1_000_000.0))
+
+                        ntu = float(row["data1"])
+                        lat = float(row["latitude"])
+                        lon = float(row["longitude"])
+                        depth = float(row["depth"])
+
+                        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                            continue
+                        if not (0.0 <= ntu < 10000.0):
+                            continue
+
+                        turb_rows.append({
+                            "timestamp_ns": ts,
+                            "datetime_utc": _ns_to_utc(ts).strftime("%Y-%m-%d %H:%M:%S.%f"),
+                            "turbidity_ntu": ntu,
+                        })
+                        stat_rows.append({
+                            "timestamp_ns": ts,
+                            "latitude": lat,
+                            "longitude": lon,
+                            "depth_m": abs(depth),
+                        })
+                    except (TypeError, ValueError, KeyError):
+                        bad_rows += 1
+
+                if bad_rows:
+                    self.log(f"  [WARN] {txt_path.name}: skipped {bad_rows} malformed row(s)")
+
+        except Exception as e:
+            self.log(f"  [ERROR] Failed to read {txt_path.name}: {e}")
+
+        return turb_rows, stat_rows
+
+    def _parse_all_turbidity_text_files(
+        self, txt_files: list[Path]
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Parse all TURBIDITY.txt files; return (turb_df, stat_df)."""
+        all_turb: list[dict] = []
+        all_stat: list[dict] = []
+
+        for path in txt_files:
+            self.log(f"  Parsing: {path.name}")
+            t_rows, s_rows = self._parse_single_turbidity_text(path)
+            self.log(f"    → {len(t_rows):,} turbidity, {len(s_rows):,} nav/status rows")
+            all_turb.extend(t_rows)
+            all_stat.extend(s_rows)
+
+        if not all_turb:
+            return pd.DataFrame(), pd.DataFrame()
+
+        turb_df = pd.DataFrame(all_turb).sort_values("timestamp_ns").reset_index(drop=True)
+        stat_df = pd.DataFrame(all_stat).sort_values("timestamp_ns").reset_index(drop=True) if all_stat else pd.DataFrame()
+        return turb_df, stat_df
+
+    def load_turbidity_and_status(self, nav_directory: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Load turbidity and nav/status rows from MCAP and TURBIDITY.txt sources."""
+        mcap_files = self.find_mcap_files(nav_directory)
+        txt_files = self.find_turbidity_text_files(nav_directory)
+
+        bag_turb_df, bag_stat_df = self._parse_all_bags(mcap_files) if mcap_files else (pd.DataFrame(), pd.DataFrame())
+        txt_turb_df, txt_stat_df = self._parse_all_turbidity_text_files(txt_files) if txt_files else (pd.DataFrame(), pd.DataFrame())
+
+        turb_frames = [df for df in (bag_turb_df, txt_turb_df) if not df.empty]
+        stat_frames = [df for df in (bag_stat_df, txt_stat_df) if not df.empty]
+
+        turb_df = (
+            pd.concat(turb_frames, ignore_index=True)
+            .sort_values("timestamp_ns")
+            .reset_index(drop=True)
+            if turb_frames else pd.DataFrame()
+        )
+        stat_df = (
+            pd.concat(stat_frames, ignore_index=True)
+            .sort_values("timestamp_ns")
+            .reset_index(drop=True)
+            if stat_frames else pd.DataFrame()
+        )
+
+        if not turb_df.empty:
+            self.log(
+                f"  Loaded {len(turb_df):,} total turbidity rows "
+                f"from {len(mcap_files)} MCAP and {len(txt_files)} text file(s)"
+            )
+
+        return turb_df, stat_df
+
     # ── Time merge ────────────────────────────────────────────────────────────
 
     def _merge_with_nav(
@@ -234,12 +363,16 @@ class TurbidityProcessor:
 
             fig, ax = plt.subplots(figsize=(12, 5), facecolor="white")
 
+            vmin = df2["turbidity_ntu"].min()
+            vmax = df2["turbidity_ntu"].max()
+            norm = mcolors.PowerNorm(gamma=0.4, vmin=vmin, vmax=vmax)
             sc = ax.scatter(
                 df2["dt"], df2["turbidity_ntu"],
                 c=df2["turbidity_ntu"], cmap="viridis_r",
-                s=6, alpha=0.7, linewidths=0,
+                norm=norm, s=6, alpha=0.7, linewidths=0,
             )
-            cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
+            cbar = fig.colorbar(sc, ax=ax, shrink=0.85,
+                                format=FuncFormatter(lambda x, _: f"{x:g}"))
             cbar.set_label("Turbidity (NTU)", fontsize=10)
 
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
@@ -249,6 +382,7 @@ class TurbidityProcessor:
             ax.set_xlabel("Time (UTC)")
             ax.set_ylabel("Turbidity (NTU)")
             ax.set_title("Turbidity vs Time")
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
@@ -275,18 +409,24 @@ class TurbidityProcessor:
 
             fig, ax = plt.subplots(figsize=(7, 9), facecolor="white")
 
+            vmin = df2["turbidity_ntu"].min()
+            vmax = df2["turbidity_ntu"].max()
+            norm = mcolors.PowerNorm(gamma=0.4, vmin=vmin, vmax=vmax)
             sc = ax.scatter(
                 df2["turbidity_ntu"], df2["depth_m"],
                 c=df2["turbidity_ntu"], cmap="viridis_r",
-                s=8, alpha=0.6, linewidths=0,
+                norm=norm, s=8, alpha=0.6, linewidths=0,
             )
-            cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
+            cbar = fig.colorbar(sc, ax=ax, shrink=0.85,
+                                format=FuncFormatter(lambda x, _: f"{x:g}"))
             cbar.set_label("Turbidity (NTU)", fontsize=10)
 
             ax.invert_yaxis()   # depth increases downward
             ax.set_xlabel("Turbidity (NTU)")
             ax.set_ylabel("Depth (m)")
             ax.set_title("Turbidity vs Depth")
+            ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
@@ -316,12 +456,16 @@ class TurbidityProcessor:
 
             fig, ax = plt.subplots(figsize=(9, 8), facecolor="white")
 
+            vmin = df2["turbidity_ntu"].min()
+            vmax = df2["turbidity_ntu"].max()
+            norm = mcolors.PowerNorm(gamma=0.4, vmin=vmin, vmax=vmax)
             sc = ax.scatter(
                 df2["longitude"], df2["latitude"],
                 c=df2["turbidity_ntu"], cmap="viridis_r",
-                s=10, alpha=0.8, linewidths=0,
+                norm=norm, s=10, alpha=0.8, linewidths=0,
             )
-            cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
+            cbar = fig.colorbar(sc, ax=ax, shrink=0.85,
+                                format=FuncFormatter(lambda x, _: f"{x:g}"))
             cbar.set_label("Turbidity (NTU)", fontsize=10)
 
             ax.set_xlabel("Longitude (°)")
@@ -357,7 +501,8 @@ class TurbidityProcessor:
         Parameters
         ----------
         nav_directory : str
-            Root directory to search recursively for .mcap bag files.
+            Root directory to search recursively for .mcap bags and
+            TURBIDITY.txt files.
         output_dir : str
             Directory where the CSV and plots will be saved.
         file_prefix : str
@@ -370,30 +515,24 @@ class TurbidityProcessor:
         self.log("=" * 60)
         self.log("TURBIDITY PROCESSING")
         self.log("=" * 60)
-        self.log(f"Scanning for .mcap files in: {nav_directory}")
+        self.log(f"Scanning for turbidity sources in: {nav_directory}")
 
-        # 1. Find bags
-        mcap_files = self.find_mcap_files(nav_directory)
-        if not mcap_files:
-            self.log("  ✗ No .mcap files found – turbidity processing skipped")
-            return False
-
-        # 2. Parse bags
-        turb_df, stat_df = self._parse_all_bags(mcap_files)
+        # 1. Load supported turbidity sources
+        turb_df, stat_df = self.load_turbidity_and_status(nav_directory)
 
         if turb_df.empty:
-            self.log("  ✗ No turbidity messages found in any bag – skipping")
+            self.log("  ✗ No turbidity data found in MCAP or TURBIDITY.txt sources – skipping")
             return False
 
         self.log(f"  Total turbidity messages: {len(turb_df):,}")
 
-        # 3. Merge with nav
+        # 2. Merge with nav
         merged_df = self._merge_with_nav(turb_df, stat_df)
 
-        # 4. Export CSV
+        # 3. Export CSV
         self.export_csv(merged_df, output_dir, file_prefix)
 
-        # 5. Generate plots
+        # 4. Generate plots
         self.log("  Generating turbidity plots...")
         self._plot_turbidity_vs_time(merged_df, output_dir, file_prefix)
         self._plot_turbidity_vs_depth(merged_df, output_dir, file_prefix)

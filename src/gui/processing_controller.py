@@ -628,8 +628,8 @@ class ProcessingController:
             self.log_message(f"Traceback: {traceback.format_exc()}")
 
     def process_turbidity_data(self, output_folder):
-        """Process turbidity data from MCAP bag files in the navigation directory."""
-        self.log_message("STAGE 1b: Processing Turbidity data from bag files...")
+        """Process turbidity data from MCAP and/or TURBIDITY.txt sources."""
+        self.log_message("STAGE 1b: Processing Turbidity data from nav sources...")
 
         nav_directory = self.nav_directory_path.get() if hasattr(self, 'nav_directory_path') else ""
 
@@ -982,11 +982,12 @@ class ProcessingController:
             self.log_message(f"  └─ ✗ Error in histogram: {e}")
 
     def process_turbidity_merge(self, input_folder, output_folder):
-        """Merge turbidity NTU values from MCAP bag files into the Image_Metrics CSV.
+        """Merge turbidity NTU values from nav turbidity sources into the Image_Metrics CSV.
 
-        Searches the navigation directory recursively for .mcap files, extracts turbidity
-        readings, then joins them to image rows in the Image_Metrics CSV by nearest
-        timestamp (±10-second tolerance).  Adds a 'turbidity_ntu' column in-place.
+        Searches the navigation directory recursively for supported turbidity sources
+        (.mcap and TURBIDITY.txt), extracts turbidity readings, then joins them to
+        image rows in the Image_Metrics CSV by nearest timestamp (±10-second
+        tolerance). Adds a 'turbidity_ntu' column in-place.
         """
         self.log_message("  └─ Running turbidity data merge...")
 
@@ -1022,18 +1023,12 @@ class ProcessingController:
             import pandas as pd
             from src.models.turbidity_processor import TurbidityProcessor
 
-            # ── Parse turbidity from bag files ───────────────────────────────
+            # ── Parse turbidity from all supported nav sources ───────────────
             processor = TurbidityProcessor(log_callback=self.log_message)
-            mcap_files = processor.find_mcap_files(nav_directory)
-
-            if not mcap_files:
-                self.log_message("  └─ ⚠ No .mcap bag files found – turbidity merge skipped")
-                return
-
-            turb_df, _ = processor._parse_all_bags(mcap_files)
+            turb_df, _ = processor.load_turbidity_and_status(nav_directory)
 
             if turb_df.empty:
-                self.log_message("  └─ ⚠ No turbidity messages found in bag files")
+                self.log_message("  └─ ⚠ No turbidity data found in nav directory sources")
                 return
 
             self.log_message(f"  └─ Parsed {len(turb_df):,} turbidity readings")

@@ -1,6 +1,9 @@
 # Core GUI and System Libraries
 #tkinter  # Usually comes with Python, but listed for completeness
 
+#Command to install all dependencies:
+#python -m pip install -r requirements.txt
+
 # Image Processing and Computer Vision
 Pillow>=9.0.0
 opencv-python>=4.5.0

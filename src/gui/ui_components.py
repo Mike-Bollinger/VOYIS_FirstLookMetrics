@@ -214,7 +214,7 @@ class UIComponents:
         # Turbidity plotting checkbox
         self.turbidity_plot_checkbox = ttk.Checkbutton(
             nav_section,
-            text="Plot Turbidity (from Bag Files — scans Navigation Directory recursively)",
+            text="Plot Turbidity (from MCAP and TURBIDITY.txt — scans Navigation Directory recursively)",
             variable=self.turbidity_plot_var,
             command=self.update_all_checkbox,
         )
