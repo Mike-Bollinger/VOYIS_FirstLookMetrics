@@ -359,15 +359,20 @@ class AppWindow(UIComponents, ProcessingController):
         self.input_button = ttk.Button(imagery_frame, text="Browse...", command=self.select_input_folder)
         self.input_button.grid(row=0, column=2)
         
-        # Vehicle Nav file selection
-        ttk.Label(imagery_frame, text="Dive Nav File:").grid(row=1, column=0, sticky='w')
-        self.nav_entry = ttk.Entry(imagery_frame, textvariable=self.nav_path, width=40)
-        self.nav_entry.grid(row=1, column=1, padx=5, sticky='ew')
-        self.nav_button = ttk.Button(imagery_frame, text="Browse...", command=self.select_nav_file)
-        self.nav_button.grid(row=1, column=2)
-        
+        # Navigation info label - heading & altitude sourced automatically from Navigation Directory
+        nav_info = ttk.Label(
+            imagery_frame,
+            text="Navigation data (heading & altitude) is sourced automatically from the Navigation Directory above.",
+            font=('TkDefaultFont', 8),
+            foreground='gray',
+            wraplength=380,
+            anchor='w',
+            justify='left'
+        )
+        nav_info.grid(row=1, column=0, columnspan=3, padx=5, pady=(2, 0), sticky='ew')
+
         # Add imagery widgets to list
-        self.input_widgets.extend([self.input_entry, self.input_button, self.nav_entry, self.nav_button])
+        self.input_widgets.extend([self.input_entry, self.input_button])
         
         # Output folder selection
         output_frame = ttk.Frame(self.input_frame)
@@ -405,7 +410,7 @@ class AppWindow(UIComponents, ProcessingController):
         # Turbidity checkbox
         self.turbidity_plot_checkbox = ttk.Checkbutton(
             nav_section,
-            text="Plot Turbidity (from Bag Files — scans Navigation Directory recursively)",
+            text="Plot Turbidity",
             variable=self.turbidity_plot_var,
             command=self.update_all_checkbox,
         )
@@ -414,7 +419,7 @@ class AppWindow(UIComponents, ProcessingController):
         # Nav track to shapefile checkbox
         self.nav_to_shp_checkbox = ttk.Checkbutton(
             nav_section,
-            text="Export Nav Track to Shapefile (dissolved_navtrack.shp)",
+            text="Export Nav Track to Shapefile",
             variable=self.nav_to_shp_var,
             command=self.update_all_checkbox,
         )
@@ -1041,10 +1046,6 @@ class AppWindow(UIComponents, ProcessingController):
                         'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data',
                         'D:/AUV/VOYIS/PC-24-04/DIVE004/Vehicle_Data'
                     ],
-                    'dive_nav_file': [
-                        'D:/AUV/VOYIS/PC-24-03/DIVE003/Vehicle_Data/DIVE003_Veh_Nav.txt',
-                        'D:/AUV/VOYIS/PC-24-04/DIVE004/Vehicle_Data/DIVE004_Veh_Nav.txt'
-                    ],
                     'LLS_Input': [
                         'D:/AUV/VOYIS/PC-24-03/DIVE003/LLS',
                         'D:/AUV/VOYIS/PC-24-04/DIVE004/LLS'
@@ -1072,9 +1073,9 @@ class AppWindow(UIComponents, ProcessingController):
                     f"Batch processing CSV template created at:\n{file_path}\n\n"
                     "Edit this file with your actual folder paths, then load it for batch processing.\n\n"
                     "Required: Output_folder (always required)\n"
-                    "Navigation Module: nav_directory (auto-detects all nav files incl. Vehicle NavData)\n"
-                    "Image Analysis Module: Image_Input; dive_nav_file is auto-detected from nav_directory\n"
-                    "  (you may still provide dive_nav_file explicitly to override auto-detection)\n"
+                    "Navigation + Imagery Module: nav_directory\n"
+                    "  (auto-detects PHINS_INS.txt and ADCP.txt for heading & altitude)\n"
+                    "Image Analysis Module: Image_Input\n"
                     "LLS Analysis Module: LLS_Input, PhinsData_Bin_file\n"
                     "Each module can be run independently."
                 )

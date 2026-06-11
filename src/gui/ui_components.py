@@ -82,7 +82,7 @@ class UIComponents:
         # Help text for batch CSV format
         help_text = ttk.Label(
             self.batch_csv_frame, 
-            text="CSV columns: nav_directory, NAV_STATE_file, PHINS_INS_file, LLS_Input, PhinsData_Bin_file, Image_Input, Dive_Nav_file (optional — auto-detected from nav_directory), Output_folder (required). Each module runs independently.",
+            text="CSV columns: nav_directory, NAV_STATE_file, PHINS_INS_file, LLS_Input, PhinsData_Bin_file, Image_Input, Output_folder (required). nav_directory is used for both Navigation and Imagery modules (heading & altitude via PHINS_INS + ADCP). Each module runs independently.",
             font=('TkDefaultFont', 8),
             foreground='gray'
         )
@@ -142,26 +142,27 @@ class UIComponents:
         imagery_frame = ttk.LabelFrame(parent, text="Imagery Inputs", padding="5")
         imagery_frame.grid(row=row, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         imagery_frame.columnconfigure(1, weight=1)
-        
+
         # Input folder selection
         ttk.Label(imagery_frame, text="Input Folder:").grid(row=0, column=0, sticky='w')
         self.input_entry = ttk.Entry(imagery_frame, textvariable=self.input_path, width=40)
         self.input_entry.grid(row=0, column=1, padx=5, sticky='ew')
         self.input_button = ttk.Button(imagery_frame, text="Browse...", command=self.select_input_folder)
         self.input_button.grid(row=0, column=2)
-        
-        # NavData file enunciator (auto-detected from Navigation Directory)
-        ttk.Label(imagery_frame, text="Vehicle Nav File:").grid(row=1, column=0, sticky='w')
-        self.nav_data_status_label = ttk.Label(
+
+        # Informational label: nav comes from Navigation Directory
+        nav_info = ttk.Label(
             imagery_frame,
-            textvariable=self.nav_data_status_var,
+            text="Navigation data (heading & altitude) is sourced automatically from the Navigation Directory above.",
+            font=('TkDefaultFont', 8),
             foreground='gray',
-            wraplength=350,
+            wraplength=380,
             anchor='w',
             justify='left'
         )
-        self.nav_data_status_label.grid(row=1, column=1, columnspan=2, padx=5, sticky='ew')
-        
+        nav_info.grid(row=1, column=0, columnspan=3, padx=5, pady=(2, 0), sticky='ew')
+
+        self.single_mode_frames = getattr(self, 'single_mode_frames', [])
         self.single_mode_frames.append(imagery_frame)
 
     def _create_output_section_in_frame(self, parent, row):

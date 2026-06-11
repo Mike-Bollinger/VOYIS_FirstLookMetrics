@@ -245,13 +245,11 @@ class ProcessingController:
             # Check what processing is selected
             nav_selected = self.nav_processing_var.get()
             turbidity_selected = (
-                nav_selected
-                and hasattr(self, 'turbidity_plot_var')
+                hasattr(self, 'turbidity_plot_var')
                 and self.turbidity_plot_var.get()
             )
             nav_to_shp_selected = (
-                nav_selected
-                and hasattr(self, 'nav_to_shp_var')
+                hasattr(self, 'nav_to_shp_var')
                 and self.nav_to_shp_var.get()
             )
             lls_selected = self.lls_processing_var.get()
@@ -324,29 +322,16 @@ class ProcessingController:
                 self.log_message("Processing Imagery data...")
                 self.log_message("       ⚠ Note: All modules now use CSV-based processing for consistency")
                 
-                # Load navigation data from dive nav text file ONLY for imagery
-                nav_file = None
-                # Only use nav_path for imagery processing (Dive Nav text file)
-                if hasattr(self, 'nav_path') and self.nav_path.get():
-                    file_path = self.nav_path.get()
-                    if file_path and os.path.exists(file_path):
-                        nav_file = file_path
-                        self.log_message(f"       Navigation source for imagery: {os.path.basename(nav_file)} (Dive Nav text file)")
-                    else:
-                        self.log_message(f"       ⚠ Dive Nav text file not found: {file_path}")
+                # Wire nav directory into footprint_map so it can self-load PHINS_INS + ADCP.
+                nav_dir = (self.nav_directory_path.get()
+                           if hasattr(self, 'nav_directory_path') else '')
+                if nav_dir and os.path.isdir(nav_dir):
+                    if hasattr(self, 'footprint_map') and self.footprint_map:
+                        self.footprint_map.nav_directory = nav_dir
+                        self.footprint_map.nav_data = None   # force reload on first use
+                        self.log_message(f"       ✓ Footprint map will use nav directory: {os.path.basename(nav_dir)}")
                 else:
-                    self.log_message("       ⚠ No Dive Nav text file specified for imagery processing")
-                
-                if nav_file:
-                    try:
-                        if self.load_navigation_data_for_imagery_only(nav_file):
-                            self.log_message("✓ Navigation data loaded successfully from text file for imagery processing")
-                        else:
-                            self.log_message("⚠ Navigation data load failed - continuing without it")
-                    except Exception as nav_error:
-                        self.log_message(f"⚠ Navigation data error: {nav_error}")
-                else:
-                    self.log_message("⚠ No navigation file specified - continuing without navigation data")
+                    self.log_message("       ⚠ No navigation directory set – footprint map will rely on EXIF/CSV data only")
                 
                 # Check stop flag before starting metadata extraction
                 if self.check_stop_flag():
@@ -1170,16 +1155,11 @@ class ProcessingController:
                     self.log_message("  └─ Using legacy GPS data for footprint analysis...")
                     # Use dive prefix if available
                     dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
-                    # Get navigation file path if available
-                    nav_file_path = None
-                    if hasattr(self, 'nav_path') and self.nav_path.get():
-                        nav_file_path = self.nav_path.get()
-                    
-                    # Call the legacy method with GPS data from metrics
+
+                    # Call the legacy method – nav_directory already set on footprint_map
                     footprint_file = self.footprint_map.create_footprint_map(
                         self.metrics.gps_data,
                         output_folder,
-                        nav_file_path=nav_file_path,
                         file_prefix=dive_prefix
                     )
                 
@@ -1454,14 +1434,9 @@ class ProcessingController:
                 self.log_message(f"{'='*60}")
                 
                 try:
-                    # Set up job-specific paths using both old and new column names for backward compatibility
+                    # Set up job-specific paths
                     input_folder = str(row.get('Image_Input', '')).strip() if pd.notna(row.get('Image_Input', '')) else ''
                     output_folder = str(row.get('Output_folder', '')).strip() if pd.notna(row.get('Output_folder', '')) else ''
-                    
-                    # Support both old and new column names for nav file
-                    nav_file = str(row.get('Dive_Nav_file', '')).strip() if pd.notna(row.get('Dive_Nav_file', '')) else ''
-                    if not nav_file:  # Try alternative column name
-                        nav_file = str(row.get('dive_nav_file', '')).strip() if pd.notna(row.get('dive_nav_file', '')) else ''
                     
                     # Navigation directory for nav processing module
                     nav_directory = str(row.get('nav_directory', '')).strip() if pd.notna(row.get('nav_directory', '')) else ''
@@ -1477,7 +1452,6 @@ class ProcessingController:
                     # Convert empty strings to None for cleaner logic
                     input_folder = input_folder if input_folder else None
                     output_folder = output_folder if output_folder else None
-                    nav_file = nav_file if nav_file else None
                     nav_directory = nav_directory if nav_directory else None
                     lls_folder = lls_folder if lls_folder else None
                     phins_nav_file = phins_nav_file if phins_nav_file else None
@@ -1519,8 +1493,8 @@ class ProcessingController:
                     
                     # Process this job
                     job_success = self.process_single_batch_job(
-                        job_num, input_folder, output_folder, 
-                        nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
+                        job_num, input_folder, output_folder,
+                        lls_folder, phins_nav_file, phins_data_nav_file,
                         nav_state_file, phins_ins_file, nav_directory
                     )
                     
@@ -1576,8 +1550,8 @@ class ProcessingController:
             if hasattr(self, 'stop_button'):
                 self.root.after(0, lambda: self.stop_button.configure(state=tk.DISABLED))
 
-    def process_single_batch_job(self, job_num, input_folder, output_folder, 
-                                nav_file, lls_folder, phins_nav_file, phins_data_nav_file,
+    def process_single_batch_job(self, job_num, input_folder, output_folder,
+                                lls_folder, phins_nav_file, phins_data_nav_file,
                                 nav_state_file, phins_ins_file, nav_directory=None):
         """Process a single job from the batch CSV - mirrors single dive processing
         Returns True if successful, False if failed or stopped"""
@@ -1588,6 +1562,14 @@ class ProcessingController:
         
         # Determine what processing is needed
         nav_selected = self.nav_processing_var.get()
+        turbidity_selected = (
+            hasattr(self, 'turbidity_plot_var')
+            and self.turbidity_plot_var.get()
+        )
+        nav_to_shp_selected = (
+            hasattr(self, 'nav_to_shp_var')
+            and self.nav_to_shp_var.get()
+        )
         lls_selected = self.lls_processing_var.get()
         imagery_selected = any([
             self.basic_metrics_var.get(),
@@ -1607,6 +1589,14 @@ class ProcessingController:
                 self.log_message(f"  - Nav state file: {nav_state_file}")
             if phins_ins_file:
                 self.log_message(f"  - PHINS INS file: {phins_ins_file}")
+        if nav_to_shp_selected:
+            self.log_message(f"  - Nav Track Shapefile export: ENABLED")
+            if nav_directory:
+                self.log_message(f"  - Nav directory: {nav_directory}")
+        if turbidity_selected:
+            self.log_message(f"  - Turbidity plotting: ENABLED")
+            if nav_directory:
+                self.log_message(f"  - Nav directory: {nav_directory}")
         if lls_selected:
             self.log_message(f"  - LLS processing: ENABLED")
             self.log_message(f"  - LLS folder: {lls_folder}")
@@ -1614,11 +1604,11 @@ class ProcessingController:
         if imagery_selected:
             self.log_message(f"  - Imagery processing: ENABLED")
             self.log_message(f"  - Input folder: {input_folder}")
-            if nav_file and os.path.exists(nav_file):
-                self.log_message(f"  - Nav file for imagery: {nav_file}")
+            if nav_directory:
+                self.log_message(f"  - Nav directory for imagery: {nav_directory}")
         self.log_message(f"  - Output folder: {output_folder}")
         
-        if not nav_selected and not lls_selected and not imagery_selected:
+        if not nav_selected and not nav_to_shp_selected and not turbidity_selected and not lls_selected and not imagery_selected:
             self.log_message(f"Job {job_num}: No processing functions selected - skipping")
             return False
         
@@ -1669,28 +1659,15 @@ class ProcessingController:
             # Set paths for this job
             if imagery_selected:
                 self.input_path.set(input_folder if input_folder else '')
-                
-                # Debug navigation file setting
-                if nav_file:
-                    if os.path.exists(nav_file):
-                        self.nav_path.set(nav_file)
-                    else:
-                        self.nav_path.set('')
-                        self.log_message(f"Job {job_num}: ⚠ Nav file does not exist: {nav_file}")
-                elif nav_directory and os.path.exists(nav_directory):
-                    # No explicit Dive_Nav_file in CSV — try to auto-detect from nav_directory
-                    if hasattr(self, 'find_navdata_file'):
-                        auto_nav = self.find_navdata_file(nav_directory)
-                        if auto_nav:
-                            self.nav_path.set(auto_nav)
-                            self.log_message(f"Job {job_num}: Auto-detected NavData file: {os.path.basename(auto_nav)}")
-                        else:
-                            self.nav_path.set('')
-                            self.log_message(f"Job {job_num}: ⚠ No NavData file found in nav_directory")
-                    else:
-                        self.nav_path.set('')
+
+                # Wire nav_directory into footprint_map (replaces Dive_Nav_file)
+                if nav_directory and os.path.isdir(nav_directory):
+                    if hasattr(self, 'footprint_map') and self.footprint_map:
+                        self.footprint_map.nav_directory = nav_directory
+                        self.footprint_map.nav_data = None
                 else:
-                    self.nav_path.set('')
+                    if hasattr(self, 'footprint_map') and self.footprint_map:
+                        self.footprint_map.nav_directory = None
             else:
                 self.input_path.set('')
                 self.nav_path.set('')
@@ -1702,7 +1679,7 @@ class ProcessingController:
                 self.lls_path.set('')
                 self.phins_nav_path.set('')
                 
-            if nav_selected:
+            if nav_selected or nav_to_shp_selected or turbidity_selected:
                 # Set navigation directory from CSV if provided
                 if nav_directory and os.path.exists(nav_directory):
                     self.nav_directory_path.set(nav_directory)
@@ -1736,6 +1713,32 @@ class ProcessingController:
                     except Exception as nav_error:
                         self.log_message(f"Job {job_num}: ✗ Navigation processing failed: {nav_error}")
                         self.log_message(f"Job {job_num}: Navigation Traceback: {traceback.format_exc()}")
+
+                # Export nav track to shapefile if selected
+                if nav_to_shp_selected:
+                    if self.check_stop_flag():
+                        return False
+
+                    self.log_message(f"Job {job_num}: Exporting Nav Track to Shapefile...")
+                    try:
+                        self.process_nav_shapefile(output_folder)
+                        self.log_message(f"Job {job_num}: ✓ Nav track shapefile export completed")
+                    except Exception as shp_error:
+                        self.log_message(f"Job {job_num}: ✗ Nav track shapefile export failed: {shp_error}")
+                        self.log_message(f"Job {job_num}: Shapefile Traceback: {traceback.format_exc()}")
+
+                # Process turbidity data if selected
+                if turbidity_selected:
+                    if self.check_stop_flag():
+                        return False
+
+                    self.log_message(f"Job {job_num}: Processing Turbidity data...")
+                    try:
+                        self.process_turbidity_data(output_folder)
+                        self.log_message(f"Job {job_num}: ✓ Turbidity processing completed")
+                    except Exception as turb_error:
+                        self.log_message(f"Job {job_num}: ✗ Turbidity processing failed: {turb_error}")
+                        self.log_message(f"Job {job_num}: Turbidity Traceback: {traceback.format_exc()}")
                 
                 # Process LLS data if selected
                 if lls_selected:
@@ -1771,7 +1774,11 @@ class ProcessingController:
                         
                         # Call the main imagery processing method
                         # Pass flag to skip navigation processing since we already did it in batch mode
-                        self.analyze_images(input_folder, output_folder, skip_nav_processing=nav_selected)
+                        self.analyze_images(
+                            input_folder,
+                            output_folder,
+                            skip_nav_processing=(nav_selected or nav_to_shp_selected or turbidity_selected),
+                        )
                         
                         # Check if processing was stopped during imagery processing
                         if self.check_stop_flag():
@@ -1839,6 +1846,14 @@ class ProcessingController:
         try:
             # Check what processing is selected
             nav_selected = self.nav_processing_var.get()
+            turbidity_selected = (
+                hasattr(self, 'turbidity_plot_var')
+                and self.turbidity_plot_var.get()
+            )
+            nav_to_shp_selected = (
+                hasattr(self, 'nav_to_shp_var')
+                and self.nav_to_shp_var.get()
+            )
             lls_selected = self.lls_processing_var.get()
             imagery_selected = any([
                 self.basic_metrics_var.get(),
@@ -1849,7 +1864,7 @@ class ProcessingController:
                 self.highlight_selector_var.get()
             ])
             
-            if not nav_selected and not lls_selected and not imagery_selected:
+            if not nav_selected and not turbidity_selected and not nav_to_shp_selected and not lls_selected and not imagery_selected:
                 self.log_message("❌ Error: No processing functions selected")
                 return False
             
@@ -1859,44 +1874,47 @@ class ProcessingController:
                 self.log_message("❌ Error: No output folder specified")
                 return False
             
-            # Validate Navigation processing inputs
-            if nav_selected:
+            # Validate navigation-directory-driven inputs
+            nav_dir_tasks_selected = nav_selected or turbidity_selected or nav_to_shp_selected
+            if nav_dir_tasks_selected:
                 nav_mode = self.nav_merge_mode.get()
-                
+
                 if nav_mode == 'directory':
                     # Directory mode validation
                     nav_directory = self.nav_directory_path.get().strip()
-                    
+
                     if not nav_directory:
-                        self.log_message("❌ Error: Navigation processing selected but no navigation directory specified")
+                        self.log_message("❌ Error: Navigation-directory processing selected but no navigation directory specified")
                         self.log_message("   Please select a directory containing navigation files")
                         return False
-                    
+
                     if not os.path.exists(nav_directory):
                         self.log_message(f"❌ Error: Navigation directory does not exist: {nav_directory}")
                         return False
-                    
+
                     if not os.path.isdir(nav_directory):
                         self.log_message(f"❌ Error: Navigation path is not a directory: {nav_directory}")
                         return False
-                    
-                    # Quick check if directory contains any potential navigation files
-                    try:
-                        from src.models.nav_merger import scan_navigation_directory
-                        nav_files = scan_navigation_directory(nav_directory)
-                        
-                        if not nav_files:
-                            self.log_message("❌ Error: No valid navigation files found in selected directory")
-                            self.log_message(f"   Directory: {nav_directory}")
-                            self.log_message("   Expected files: PHINS INS, NAV_STATE, STATE, ADCP, or *_Veh_Data files")
+
+                    # Full nav plotting requires mergeable nav files; turbidity/shapefile can run
+                    # from any supported nav-directory sources.
+                    if nav_selected:
+                        try:
+                            from src.models.nav_merger import scan_navigation_directory
+                            nav_files = scan_navigation_directory(nav_directory)
+
+                            if not nav_files:
+                                self.log_message("❌ Error: No valid navigation files found in selected directory")
+                                self.log_message(f"   Directory: {nav_directory}")
+                                self.log_message("   Expected files: PHINS INS, NAV_STATE, STATE, ADCP, or *_Veh_Data files")
+                                return False
+
+                            file_types = list(nav_files.keys())
+                            self.log_message(f"✅ Navigation directory contains: {', '.join(file_types).upper()}")
+
+                        except Exception as e:
+                            self.log_message(f"❌ Error: Could not scan navigation directory: {e}")
                             return False
-                        
-                        file_types = list(nav_files.keys())
-                        self.log_message(f"✅ Navigation directory contains: {', '.join(file_types).upper()}")
-                        
-                    except Exception as e:
-                        self.log_message(f"❌ Error: Could not scan navigation directory: {e}")
-                        return False
             
             # Validate LLS processing inputs
             if lls_selected:
@@ -1991,6 +2009,14 @@ class ProcessingController:
             
             # Check if any processing functions are selected
             nav_selected = self.nav_processing_var.get()
+            turbidity_selected = (
+                hasattr(self, 'turbidity_plot_var')
+                and self.turbidity_plot_var.get()
+            )
+            nav_to_shp_selected = (
+                hasattr(self, 'nav_to_shp_var')
+                and self.nav_to_shp_var.get()
+            )
             lls_selected = self.lls_processing_var.get()
             imagery_selected = any([
                 self.basic_metrics_var.get(),
@@ -2001,7 +2027,7 @@ class ProcessingController:
                 self.highlight_selector_var.get()
             ])
             
-            if not nav_selected and not lls_selected and not imagery_selected:
+            if not nav_selected and not turbidity_selected and not nav_to_shp_selected and not lls_selected and not imagery_selected:
                 self.log_message("❌ Error: No processing functions selected for batch processing")
                 return False
             
@@ -2016,7 +2042,14 @@ class ProcessingController:
                 
                 # Check required columns
                 required_columns = ['Output_folder']
-                optional_columns = ['Image_Input', 'Dive_Nav_file', 'LLS_Input', 'PhinsData_Bin_file']
+                optional_columns = [
+                    'Image_Input',
+                    'LLS_Input',
+                    'PhinsData_Bin_file',
+                    'nav_directory',
+                    'NAV_STATE_file',
+                    'PHINS_INS_file',
+                ]
                 
                 missing_required = [col for col in required_columns if col not in df.columns]
                 if missing_required:
@@ -2093,34 +2126,24 @@ class ProcessingController:
             self.log_message(f"⚠️ Warning: Could not validate visibility model: {e}")
             return True  # Don't fail validation for visibility model issues
     
-    def load_navigation_data_for_imagery_only(self, nav_file):
-        """Load navigation data specifically for imagery processing, ensuring no PhinsData contamination"""
+    def load_navigation_data_for_imagery_only(self, nav_file=None):
+        """Wire the nav directory into imagery processors (footprint_map).
+        The nav_file argument is kept for backward compatibility but is no
+        longer used; the Navigation Directory drives everything.
+        """
         try:
-            if not hasattr(self, 'metrics') or not self.metrics:
-                return False
-                
-            # Force reload of navigation data from text file
-            success = self.metrics.load_nav_data(nav_file)
-            if success:
-                self.log_message(f"       ✓ Navigation data loaded for imagery altitude and heading extraction")
-                
-                # ONLY share navigation data from text file (not PhinsData) with imagery modules
-                if hasattr(self.metrics, 'nav_timestamps'):
-                    # For footprint map, we don't use nav_timestamps, it loads its own nav_data
-                    # Just ensure it loads from the correct file
-                    if hasattr(self, 'footprint_map') and self.footprint_map:
-                        # Make sure footprint map uses the text file navigation data
-                        footprint_nav_success = self.footprint_map.load_nav_data(nav_file)
-                        if footprint_nav_success:
-                            self.log_message(f"       ✓ Footprint map loaded navigation data from text file")
-                        else:
-                            self.log_message(f"       ⚠ Footprint map failed to load navigation data")
-                        
+            nav_dir = (self.nav_directory_path.get()
+                       if hasattr(self, 'nav_directory_path') else '')
+
+            if nav_dir and os.path.isdir(nav_dir):
+                if hasattr(self, 'footprint_map') and self.footprint_map:
+                    self.footprint_map.nav_directory = nav_dir
+                    self.footprint_map.nav_data = None   # will load on first use
+                    self.log_message(f"       ✓ Footprint map wired to nav directory: {os.path.basename(nav_dir)}")
                 return True
             else:
-                self.log_message(f"       ⚠ Failed to load navigation data for imagery")
+                self.log_message("       ⚠ No navigation directory set for imagery")
                 return False
-                
         except Exception as e:
-            self.log_message(f"       ⚠ Navigation data error for imagery: {e}")
+            self.log_message(f"       ⚠ Navigation wiring error: {e}")
             return False

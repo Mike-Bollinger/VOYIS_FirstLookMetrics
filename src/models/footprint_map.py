@@ -33,7 +33,164 @@ class FootprintMap:
         self.vfov = 42  # Vertical Field of View in degrees
         self.nav_data = None
         self.altitude_threshold = altitude_threshold  # Add threshold parameter
-        
+        # Directory-based nav source (PHINS_INS + ADCP).  Set by the controller
+        # before calling create_footprint_map / create_footprint_map_from_csv.
+        self.nav_directory = None
+
+    # ------------------------------------------------------------------
+    # Directory-based nav loader (PHINS_INS + ADCP via nav_merger)
+    # ------------------------------------------------------------------
+    def load_nav_from_directory(self, nav_directory: str, dive_date=None) -> bool:
+        """
+        Discover and merge navigation files from a directory.
+
+        Loads PHINS_INS.txt (heading + position at ~2.3 Hz) and ADCP.txt
+        (altitude at ~0.57 Hz), merges them into self.nav_data which gains
+        columns: Datetime, Heading, altitude, time_seconds.
+
+        Args:
+            nav_directory: Directory to scan (searched recursively).
+            dive_date:     Optional datetime.date used to convert
+                           seconds-since-midnight to absolute datetimes.
+                           When None the code tries to extract a date from
+                           the directory path; if that also fails only
+                           time-of-day matching is used.
+        Returns:
+            True on success, False if no usable data was found.
+        """
+        import datetime as dt_module
+        import re
+
+        try:
+            from src.models.nav_merger import NavigationDataMerger
+        except ImportError:
+            try:
+                from models.nav_merger import NavigationDataMerger
+            except ImportError:
+                print("  ✗ Could not import NavigationDataMerger")
+                return False
+
+        print(f"  Loading nav data from directory: {nav_directory}")
+        if not os.path.isdir(nav_directory):
+            print(f"  ✗ Nav directory not found: {nav_directory}")
+            return False
+
+        merger = NavigationDataMerger(log_callback=print)
+
+        phins_df = None
+        adcp_df  = None
+
+        for root, _dirs, files in os.walk(nav_directory):
+            for fname in sorted(files):
+                if not fname.lower().endswith('.txt'):
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    ftype = merger.identify_file_type(fpath)
+                except Exception:
+                    continue
+                if ftype == 'phins_ins' and phins_df is None:
+                    phins_df = merger.load_and_standardize_file(fpath, 'phins_ins')
+                    if phins_df is not None and not phins_df.empty:
+                        print(f"  ✓ PHINS_INS: {fname} ({len(phins_df)} records)")
+                elif ftype == 'adcp' and adcp_df is None:
+                    adcp_df = merger.load_and_standardize_file(fpath, 'adcp')
+                    if adcp_df is not None and not adcp_df.empty:
+                        print(f"  ✓ ADCP: {fname} ({len(adcp_df)} records)")
+
+        if phins_df is None or phins_df.empty:
+            print("  ✗ No PHINS_INS data found in directory")
+            return False
+
+        # ── Determine dive date ────────────────────────────────────────
+        if dive_date is None:
+            m = re.search(r'(\d{4})[_\-](\d{2})[_\-](\d{2})', nav_directory)
+            if not m:
+                m = re.search(r'(\d{4})(\d{2})(\d{2})', nav_directory)
+            if m:
+                try:
+                    dive_date = dt_module.date(int(m.group(1)),
+                                               int(m.group(2)),
+                                               int(m.group(3)))
+                    print(f"  Dive date extracted from path: {dive_date}")
+                except ValueError:
+                    pass
+
+        # ── Convert ms-since-midnight → datetime ───────────────────────
+        def ms_to_dt(ms_val, base_date):
+            if pd.isna(ms_val):
+                return pd.NaT
+            total_s = float(ms_val) / 1000.0
+            extra_days = 0
+            while total_s >= 86400.0:
+                total_s -= 86400.0
+                extra_days += 1
+            day = base_date + dt_module.timedelta(days=extra_days)
+            try:
+                us = int((total_s % 1) * 1_000_000)
+                return dt_module.datetime.combine(
+                    day,
+                    dt_module.time(int(total_s // 3600),
+                                   int((total_s % 3600) // 60),
+                                   int(total_s % 60),
+                                   us))
+            except (ValueError, OverflowError):
+                return pd.NaT
+
+        # phins_df['time'] is ms-since-midnight set by nav_merger
+        if dive_date is not None:
+            phins_df['Datetime'] = phins_df['time'].apply(
+                lambda x: ms_to_dt(x, dive_date))
+            if adcp_df is not None and not adcp_df.empty:
+                adcp_df['Datetime'] = adcp_df['time'].apply(
+                    lambda x: ms_to_dt(x, dive_date))
+        else:
+            phins_df['Datetime'] = pd.NaT
+            print("  ⚠ No dive date – will use time-of-day fallback matching")
+
+        # time_seconds stored for fallback (always, even when Datetime is valid)
+        phins_df['time_seconds'] = phins_df['time'] / 1000.0
+
+        # ── Merge ADCP altitude into PHINS timestamps ──────────────────
+        if (adcp_df is not None and not adcp_df.empty
+                and 'altitude' in adcp_df.columns):
+            adcp_clean = adcp_df.dropna(subset=['altitude'])
+            adcp_clean = adcp_clean[adcp_clean['altitude'] > 0].copy()
+            if not adcp_clean.empty:
+                phins_times = phins_df['time'].values.astype(float)
+                adcp_times  = adcp_clean['time'].values.astype(float)
+                adcp_alts   = adcp_clean['altitude'].values.astype(float)
+                phins_df['altitude'] = np.interp(
+                    phins_times, adcp_times, adcp_alts,
+                    left=np.nan, right=np.nan)
+                valid_alt = phins_df['altitude'].notna().sum()
+                print(f"  Altitude interpolated from ADCP: "
+                      f"{valid_alt}/{len(phins_df)} records")
+            else:
+                phins_df['altitude'] = np.nan
+                print("  ⚠ ADCP altitude all zero/negative – no bottom tracking")
+        else:
+            phins_df['altitude'] = np.nan
+            print("  ⚠ No ADCP data – altitude will fall back to EXIF/CSV value")
+
+        # ── Build nav_data ─────────────────────────────────────────────
+        if 'heading' in phins_df.columns:
+            phins_df['Heading'] = phins_df['heading'].apply(
+                lambda x: Metrics.normalize_heading(x) if pd.notna(x) else x)
+        else:
+            phins_df['Heading'] = 0.0
+            print("  ⚠ No heading column in PHINS data")
+
+        cols = ['Datetime', 'Heading', 'altitude', 'time_seconds']
+        self.nav_data = phins_df[[c for c in cols if c in phins_df.columns]].copy()
+        self.nav_data = self.nav_data.dropna(subset=['Heading']).reset_index(drop=True)
+
+        print(f"  Nav data ready: {len(self.nav_data)} records  |  "
+              f"heading {self.nav_data['Heading'].min():.1f}°–"
+              f"{self.nav_data['Heading'].max():.1f}°  |  "
+              f"altitude valid: {self.nav_data['altitude'].notna().sum()}")
+        return True
+
     def load_nav_data(self, nav_file_path: str) -> bool:
         """
         Load navigation data from a text file, focusing only on time and heading
@@ -424,85 +581,102 @@ class FootprintMap:
     
     def _match_image_to_nav(self, image_datetime, tolerance_seconds=60):
         """
-        Find matching navigation record for an image timestamp
-        
+        Find matching navigation record for an image timestamp.
+
+        Returns a dict {'heading': float, 'altitude': float or None} on
+        success, or None if no match within tolerance.
+
         Args:
-            image_datetime: Image timestamp
-            tolerance_seconds: Max allowable time difference
-        
-        Returns:
-            Closest matching navigation record's heading or None
+            image_datetime: Image timestamp (timezone-naive datetime)
+            tolerance_seconds: Max allowable time difference in seconds
         """
-        if self.nav_data is None or 'Datetime' not in self.nav_data.columns:
+        if self.nav_data is None or 'Heading' not in self.nav_data.columns:
             return None
-        
+
         try:
-            # Check if we need to adjust the year (in case nav data and images have different years)
+            # ── Year-difference check (run once) ──────────────────────
             if not hasattr(self, '_year_difference_checked'):
                 self._year_difference_checked = True
-                
-                # Get a sample image datetime
-                img_year = image_datetime.year
-                nav_year = self.nav_data['Datetime'].iloc[0].year
-                
-                if img_year != nav_year:
-                    print(f"Warning: Image year ({img_year}) differs from navigation data year ({nav_year})")
-                    print(f"Will adjust image datetime year to match navigation data")
-                    
-                    # Store the year difference for future adjustments
-                    self._year_difference = nav_year - img_year
+                valid_nav_dt = self.nav_data['Datetime'].dropna()
+                if not valid_nav_dt.empty:
+                    img_year = image_datetime.year
+                    nav_year = valid_nav_dt.iloc[0].year
+                    self._year_difference = nav_year - img_year if img_year != nav_year else 0
+                    if self._year_difference:
+                        print(f"Warning: adjusting image year by {self._year_difference} to match nav data")
                 else:
                     self._year_difference = 0
-            
-            # Adjust the image datetime year if needed
-            if hasattr(self, '_year_difference') and self._year_difference != 0:
-                adjusted_datetime = image_datetime.replace(year=image_datetime.year + self._year_difference)
-            else:
-                adjusted_datetime = image_datetime
-                
-            # Convert to pandas timestamp for comparison
-            img_time = pd.Timestamp(adjusted_datetime)
-            
-            # Calculate time differences
-            time_diffs = abs(self.nav_data['Datetime'] - img_time)
-            
-            # Find closest match
-            if not time_diffs.empty:
-                min_diff_seconds = time_diffs.min().total_seconds()
-                
-                if min_diff_seconds <= tolerance_seconds:
-                    closest_idx = time_diffs.idxmin()
-                    closest_match = self.nav_data.iloc[closest_idx]
-                    
-                    # Only print for the first few matches to avoid flooding the console
+
+            adjusted_dt = (image_datetime.replace(
+                year=image_datetime.year + self._year_difference)
+                if getattr(self, '_year_difference', 0) != 0
+                else image_datetime)
+
+            # ── Attempt 1: match by full Datetime ─────────────────────
+            valid_mask = self.nav_data['Datetime'].notna()
+            if valid_mask.any():
+                img_ts   = pd.Timestamp(adjusted_dt)
+                diffs    = abs(self.nav_data.loc[valid_mask, 'Datetime'] - img_ts)
+                min_diff = diffs.min().total_seconds()
+
+                if min_diff <= tolerance_seconds:
+                    idx   = diffs.idxmin()
+                    match = self.nav_data.iloc[idx]
+                    alt   = float(match['altitude']) if 'altitude' in match and pd.notna(match['altitude']) else None
+
                     if not hasattr(self, '_match_count'):
                         self._match_count = 0
-                        
                     if self._match_count < 10:
-                        print(f"Matched image at {img_time} to nav record at {closest_match['Datetime']}, "
-                             f"diff: {min_diff_seconds:.2f}s, heading: {closest_match['Heading']}")
+                        print(f"  Nav match: img={img_ts}  nav={match['Datetime']}  "
+                              f"diff={min_diff:.2f}s  hdg={match['Heading']:.1f}°  "
+                              f"alt={'N/A' if alt is None else f'{alt:.1f}m'}")
                         self._match_count += 1
                     elif self._match_count == 10:
-                        print("(Suppressing further match messages)")
+                        print("  (Nav match logging suppressed)")
                         self._match_count += 1
-                    
-                    # Just return the heading
-                    return closest_match['Heading']
-                else:
-                    if not hasattr(self, '_nomatch_count'):
-                        self._nomatch_count = 0
-                        
-                    if self._nomatch_count < 5:
-                        print(f"No match within tolerance: Image time {img_time}, "
-                             f"closest nav diff: {min_diff_seconds:.2f}s (tolerance: {tolerance_seconds}s)")
-                        self._nomatch_count += 1
-                    elif self._nomatch_count == 5:
-                        print("(Suppressing further no-match messages)")
-                        self._nomatch_count += 1
-            
+
+                    return {'heading': float(match['Heading']), 'altitude': alt}
+
+            # ── Attempt 2: time-of-day fallback (when Datetime all NaT) ─
+            if 'time_seconds' in self.nav_data.columns:
+                img_sod = (adjusted_dt.hour * 3600
+                           + adjusted_dt.minute * 60
+                           + adjusted_dt.second
+                           + adjusted_dt.microsecond / 1e6)
+                diffs_s = abs(self.nav_data['time_seconds'] - img_sod)
+                min_diff = diffs_s.min()
+
+                if min_diff <= tolerance_seconds:
+                    idx   = diffs_s.idxmin()
+                    match = self.nav_data.iloc[idx]
+                    alt   = float(match['altitude']) if 'altitude' in match and pd.notna(match['altitude']) else None
+
+                    if not hasattr(self, '_match_count'):
+                        self._match_count = 0
+                    if self._match_count < 10:
+                        print(f"  Nav match (TOD): img_sod={img_sod:.2f}s  "
+                              f"diff={min_diff:.2f}s  hdg={match['Heading']:.1f}°  "
+                              f"alt={'N/A' if alt is None else f'{alt:.1f}m'}")
+                        self._match_count += 1
+                    elif self._match_count == 10:
+                        print("  (Nav match logging suppressed)")
+                        self._match_count += 1
+
+                    return {'heading': float(match['Heading']), 'altitude': alt}
+
+            # No match within tolerance
+            if not hasattr(self, '_nomatch_count'):
+                self._nomatch_count = 0
+            if self._nomatch_count < 5:
+                print(f"  No nav match within {tolerance_seconds}s for image at {adjusted_dt}")
+                self._nomatch_count += 1
+            elif self._nomatch_count == 5:
+                print("  (No-match logging suppressed)")
+                self._nomatch_count += 1
+
         except Exception as e:
             print(f"Error matching image to nav: {e}")
-            
+
         return None
     
     def _parse_datetime_from_filename(self, filename):
@@ -578,9 +752,21 @@ class FootprintMap:
         # Use plot_data for creating the map, but keep original gps_data for exports
         # Rest of the existing function code, but use plot_data instead of gps_data for plotting
         
-        # Load navigation data if provided
-        if nav_file_path and os.path.exists(nav_file_path):
-            self.load_nav_data(nav_file_path)
+        # Load navigation data: try directory-based source first, then single file fallback
+        if self.nav_data is None:
+            if self.nav_directory and os.path.isdir(self.nav_directory):
+                # Extract dive date from first image datetime for time conversion
+                _dive_date = None
+                for _pt in gps_data[:20]:
+                    _fname = _pt.get('filename', '')
+                    _dt = self._parse_datetime_from_filename(_fname)
+                    if _dt:
+                        import datetime as _dt_mod
+                        _dive_date = _dt.date()
+                        break
+                self.load_nav_from_directory(self.nav_directory, dive_date=_dive_date)
+            elif nav_file_path and os.path.exists(nav_file_path):
+                self.load_nav_data(nav_file_path)
         
         print(f"Processing {len(plot_data)} GPS data points")
         
@@ -622,75 +808,70 @@ class FootprintMap:
             # Default heading - will be used if we can't match with nav data
             heading = 0
             image_datetime = None
-            
+            nav_altitude = None   # altitude from nav merger (may override EXIF)
+
             try:
-                # Check if heading is already available in the point data (from CSV)
-                if 'heading' in point and point['heading'] is not None:
-                    heading = Metrics.normalize_heading(float(point['heading']))
-                    match_found_count += 1
-                    print(f"DEBUG: Using CSV heading {heading:.1f}° for image {point.get('filename', 'unknown')}")
-                else:
-                    # If no heading in CSV, try to extract datetime from the point for nav matching
-                    
-                    # Try to get DateTime from EXIF
-                    if 'DateTime' in point and point['DateTime'] and point['DateTime'] != 'N/A':
-                        try:
-                            # Handle common EXIF datetime format: "2024:06:27 07:49:38"
-                            if isinstance(point['DateTime'], str):
-                                if ':' in point['DateTime']:
-                                    # Replace colons in date part with dashes for parsing
-                                    date_time = point['DateTime'].replace(':', '-', 2)
-                                    image_datetime = parser.parse(date_time)
-                                else:
-                                    image_datetime = parser.parse(point['DateTime'])
-                            else:
-                                # If it's already a datetime object
-                                image_datetime = point['DateTime']
-                        except Exception as e:
-                            print(f"Error parsing DateTime from EXIF: {e}")
-                            
-                    # Try from filename if DateTime not available from EXIF
-                    if image_datetime is None and 'filename' in point:
-                        image_datetime = self._parse_datetime_from_filename(point['filename'])
-                        if image_datetime:
-                            print(f"Parsed datetime from filename: {image_datetime}")
-                    
-                    # If we have a datetime, count it for logging
+                # Try to extract datetime for nav matching (needed for heading AND altitude)
+                if 'DateTime' in point and point['DateTime'] and point['DateTime'] != 'N/A':
+                    try:
+                        if isinstance(point['DateTime'], str):
+                            date_time = point['DateTime'].replace(':', '-', 2)
+                            image_datetime = parser.parse(date_time)
+                        else:
+                            image_datetime = point['DateTime']
+                    except Exception as e:
+                        print(f"Error parsing DateTime from EXIF: {e}")
+
+                if image_datetime is None and 'filename' in point:
+                    image_datetime = self._parse_datetime_from_filename(point['filename'])
+
+                # Try nav matching for heading AND altitude
+                nav_match = None
+                if image_datetime and self.nav_data is not None:
                     if image_datetime:
                         datetime_available_count += 1
-                        
-                        # Get heading from nav data
-                        if self.nav_data is not None:
-                            matched_heading = self._match_image_to_nav(image_datetime)
-                            if matched_heading is not None:
-                                heading = Metrics.normalize_heading(matched_heading)
-                                match_found_count += 1
-                                print(f"DEBUG: Using matched heading {heading:.1f}° for image at {image_datetime}")
-                            else:
-                                print(f"DEBUG: No nav match found for image at {image_datetime}, using default heading 0°")
-                        else:
-                            print("DEBUG: No navigation data available, using default heading 0°")
+                    nav_match = self._match_image_to_nav(image_datetime)
+
+                # Resolve heading: CSV value (non-zero) → nav match → default 0
+                _csv_heading = point.get('heading')
+                if _csv_heading is not None and float(_csv_heading) != 0.0:
+                    heading = Metrics.normalize_heading(float(_csv_heading))
+                    match_found_count += 1
+                elif nav_match is not None:
+                    heading = Metrics.normalize_heading(nav_match['heading'])
+                    match_found_count += 1
+                else:
+                    if image_datetime:
+                        print(f"  No nav match for image at {image_datetime}, using heading 0°")
+
+                # Resolve altitude: nav match → existing point value
+                if nav_match is not None and nav_match.get('altitude') is not None:
+                    nav_altitude = nav_match['altitude']
+
+                point_altitude = nav_altitude if nav_altitude is not None else point['altitude']
                 
-                # Calculate footprint dimensions
-                width, height = self._calculate_footprint(point['altitude'])
-                
+                # Calculate footprint dimensions using resolved altitude
+                width, height = self._calculate_footprint(point_altitude)
+
                 # Calculate polygon vertices
                 vertices = self._calculate_polygon_vertices(
-                    point['latitude'], 
-                    point['longitude'], 
-                    point['altitude'], 
+                    point['latitude'],
+                    point['longitude'],
+                    point_altitude,
                     heading
                 )
-                
+
                 # Debug output for first few footprints
                 if len(footprints) < 3:
-                    print(f"DEBUG: Footprint {len(footprints)+1} - Lat: {point['latitude']:.6f}, Lon: {point['longitude']:.6f}, Alt: {point['altitude']:.1f}m, Heading: {heading:.1f}°")
-                
-                # Add footprint data to the point
+                    alt_src = "nav" if nav_altitude is not None else "EXIF/CSV"
+                    print(f"  Footprint {len(footprints)+1} – "
+                          f"Lat:{point['latitude']:.6f} Lon:{point['longitude']:.6f} "
+                          f"Alt:{point_altitude:.1f}m ({alt_src}) Hdg:{heading:.1f}°")
+
                 footprint_data = {
                     'latitude': point['latitude'],
                     'longitude': point['longitude'],
-                    'altitude': point['altitude'],
+                    'altitude': point_altitude,
                     'heading': heading,
                     'width': width,
                     'height': height,
@@ -2988,15 +3169,41 @@ class FootprintMap:
                 print("No valid GPS data found in CSV")
                 return None
             
+            # Load navigation from directory (PHINS_INS + ADCP) if available
+            # and nav_data not already loaded.
+            if self.nav_data is None and self.nav_directory and os.path.isdir(self.nav_directory):
+                # Extract dive date from the CSV datetime column
+                _dive_date = None
+                dt_col = next((c for c in ['datetime_original', 'DateTime', 'datetime'] if c in df.columns), None)
+                if dt_col:
+                    for _val in df[dt_col].dropna().head(20):
+                        try:
+                            import datetime as _dt_mod
+                            _parsed = pd.to_datetime(_val, errors='coerce')
+                            if pd.notna(_parsed):
+                                _dive_date = _parsed.date()
+                                break
+                        except Exception:
+                            pass
+                self.load_nav_from_directory(self.nav_directory, dive_date=_dive_date)
+
             # Convert DataFrame to GPS data format expected by existing methods
             gps_data = []
             for _, row in df_filtered.iterrows():
+                # Only populate heading if the CSV has a meaningful non-zero value.
+                # A stored heading of 0.0 (default/unknown) is treated as no data so
+                # the nav-merger match is tried instead.
+                _hdg_raw = row.get('heading')
+                _hdg = float(_hdg_raw) if pd.notna(_hdg_raw) else None
+                if _hdg == 0.0:
+                    _hdg = None  # treat 0 as "no real heading" → fall through to nav match
+
                 gps_point = {
                     'filename': row['filename'],
                     'latitude': float(row['latitude']),
                     'longitude': float(row['longitude']),
                     'altitude': float(row['altitude']) if pd.notna(row.get('altitude')) else 5.0,  # Default altitude if missing
-                    'heading': float(row['heading']) if pd.notna(row.get('heading')) else 0.0,
+                    'heading': _hdg,
                     'datetime': row.get('datetime_original', ''),
                     'processing_type': row.get('processing_type', 'unknown')
                 }

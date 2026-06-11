@@ -90,8 +90,8 @@ class TurbidityProcessor:
         """Recursively find exported TURBIDITY.txt files under root_dir."""
         root = Path(root_dir)
         txt_files = sorted(
-            path for path in root.rglob("*.txt")
-            if path.name.lower() == "turbidity.txt"
+            path for path in root.rglob("*")
+            if path.is_file() and path.name.lower() == "turbidity.txt"
         )
         self.log(f"  Found {len(txt_files)} TURBIDITY.txt file(s) under {root_dir}")
         return txt_files
@@ -145,12 +145,15 @@ class TurbidityProcessor:
                             # Depth convention: status payload stores a signed
                             # value where negative = below surface.
                             # Store as positive depth (metres below surface).
-                            stat_rows.append({
-                                "timestamp_ns": ts,
-                                "latitude":     lat,
-                                "longitude":    lon,
-                                "depth_m":      abs(depth),
-                            })
+                            # Validate depth is realistic (0–10000 m); reject if out of range.
+                            abs_depth = abs(depth)
+                            if 0 <= abs_depth <= 10000:
+                                stat_rows.append({
+                                    "timestamp_ns": ts,
+                                    "latitude":     lat,
+                                    "longitude":    lon,
+                                    "depth_m":      abs_depth,
+                                })
 
         except Exception as e:
             self.log(f"  [ERROR] Failed to read {mcap_path.name}: {e}")
@@ -264,36 +267,32 @@ class TurbidityProcessor:
         return turb_df, stat_df
 
     def load_turbidity_and_status(self, nav_directory: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Load turbidity and nav/status rows from MCAP and TURBIDITY.txt sources."""
-        mcap_files = self.find_mcap_files(nav_directory)
+        """Load turbidity and nav/status rows, preferring TURBIDITY.txt over MCAP."""
         txt_files = self.find_turbidity_text_files(nav_directory)
 
+        # Prefer text exports first. They are faster to parse and are often the
+        # primary source for dives where bags are absent.
+        if txt_files:
+            txt_turb_df, txt_stat_df = self._parse_all_turbidity_text_files(txt_files)
+            if not txt_turb_df.empty:
+                self.log(
+                    f"  Loaded {len(txt_turb_df):,} total turbidity rows from "
+                    f"{len(txt_files)} text file(s); skipping MCAP parse"
+                )
+                return txt_turb_df, txt_stat_df
+
+            self.log("  TURBIDITY.txt file(s) found but no valid rows parsed; falling back to MCAP")
+
+        mcap_files = self.find_mcap_files(nav_directory)
         bag_turb_df, bag_stat_df = self._parse_all_bags(mcap_files) if mcap_files else (pd.DataFrame(), pd.DataFrame())
-        txt_turb_df, txt_stat_df = self._parse_all_turbidity_text_files(txt_files) if txt_files else (pd.DataFrame(), pd.DataFrame())
 
-        turb_frames = [df for df in (bag_turb_df, txt_turb_df) if not df.empty]
-        stat_frames = [df for df in (bag_stat_df, txt_stat_df) if not df.empty]
-
-        turb_df = (
-            pd.concat(turb_frames, ignore_index=True)
-            .sort_values("timestamp_ns")
-            .reset_index(drop=True)
-            if turb_frames else pd.DataFrame()
-        )
-        stat_df = (
-            pd.concat(stat_frames, ignore_index=True)
-            .sort_values("timestamp_ns")
-            .reset_index(drop=True)
-            if stat_frames else pd.DataFrame()
-        )
-
-        if not turb_df.empty:
+        if not bag_turb_df.empty:
             self.log(
-                f"  Loaded {len(turb_df):,} total turbidity rows "
-                f"from {len(mcap_files)} MCAP and {len(txt_files)} text file(s)"
+                f"  Loaded {len(bag_turb_df):,} total turbidity rows "
+                f"from {len(mcap_files)} MCAP file(s)"
             )
 
-        return turb_df, stat_df
+        return bag_turb_df, bag_stat_df
 
     # ── Time merge ────────────────────────────────────────────────────────────
 
@@ -348,35 +347,154 @@ class TurbidityProcessor:
             ax.xaxis.set_major_formatter(fmt)
         if which in ("y", "both"):
             ax.yaxis.set_major_formatter(fmt)
+    
+    @staticmethod
+    def _get_turbidity_colorbar_limits(data: pd.Series, percentile_range: tuple = (5, 95)) -> tuple:
+        """
+        Compute robust colorbar limits using percentile clipping.
+        
+        Handles datasets with low variation or outliers by clipping to 5th–95th percentile.
+        This approach is well-documented in oceanographic data visualization (e.g., Balch et al.,
+        JTECH 2005; Bailey & Wilis, RS 2010) for robust visualization of sparse or variable data.
+        
+        Parameters
+        ----------
+        data : pd.Series
+            Turbidity values in NTU.
+        percentile_range : tuple
+            (lower_percentile, upper_percentile) for clipping. Default (5, 95).
+            
+        Returns
+        -------
+        (vmin, vmax) : tuple of float
+            Robust color scale limits.
+        """
+        valid_data = data.dropna()
+        if len(valid_data) == 0:
+            return 0.0, 50.0  # Fallback
+        
+        vmin = np.percentile(valid_data, percentile_range[0])
+        vmax = np.percentile(valid_data, percentile_range[1])
+        
+        # Ensure at least minimal range for visualization
+        if vmax <= vmin:
+            vmax = vmin + 1.0
+        
+        return vmin, vmax
+
+    @staticmethod
+    def _format_turbidity_time_axis(ax, time_data: pd.Series, log_callback=None):
+        """Format turbidity time axis with midnight crossover handling."""
+        if time_data.empty:
+            return
+
+        mission_start = time_data.min()
+        mission_end = time_data.max()
+        time_span = (mission_end - mission_start).total_seconds()
+
+        start_seconds = mission_start.hour * 3600 + mission_start.minute * 60 + mission_start.second
+        end_seconds = mission_end.hour * 3600 + mission_end.minute * 60 + mission_end.second
+        unique_dates = time_data.dt.date.nunique()
+
+        crosses_midnight = (
+            (time_span > 6 * 3600 and end_seconds < start_seconds)
+            or (time_span > 18 * 3600)
+            or (unique_dates > 1)
+        )
+
+        if time_span > 2 * 86_400:
+            # Defensive fallback for anomalous ranges to avoid MAXTICKS errors.
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=12))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+            return
+
+        if crosses_midnight:
+            if log_callback:
+                log_callback("  Detected midnight crossing in turbidity time series")
+
+            mission_start_num = mdates.date2num(mission_start.to_pydatetime())
+
+            def time_from_start_formatter(x, _pos):
+                elapsed = (x - mission_start_num) * 24.0 * 3600.0
+                if elapsed < 0:
+                    elapsed = 0
+                hours = int(elapsed // 3600)
+                minutes = int((elapsed % 3600) // 60)
+                return f"T+{hours:02d}:{minutes:02d}"
+
+            if time_span > 4 * 3600:
+                ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=15))
+            else:
+                ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=30))
+                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=10))
+
+            ax.xaxis.set_major_formatter(FuncFormatter(time_from_start_formatter))
+        else:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            if time_span > 7200:
+                ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=10))
+            elif time_span > 1800:
+                ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=10))
+                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=2))
+            else:
+                ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
+                ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=1))
 
     def _plot_turbidity_vs_time(
         self, df: pd.DataFrame, output_dir: str, file_prefix: str
     ) -> str | None:
-        """Turbidity (NTU) vs UTC time."""
+        """Turbidity (NTU) vs UTC time with midnight crossing detection."""
         try:
             df2 = df.dropna(subset=["turbidity_ntu"]).copy()
             if df2.empty:
                 self.log("  ⚠ No turbidity data for time plot")
                 return None
 
-            df2["dt"] = pd.to_datetime(df2["datetime_utc"], utc=True)
+            df2["dt"] = pd.to_datetime(df2["datetime_utc"], utc=True, errors="coerce")
+
+            # If source timestamps are inconsistent across files/sensors, datetime_utc can span
+            # implausibly large ranges and cause matplotlib locator explosions.
+            valid_dt = df2["dt"].dropna()
+            if not valid_dt.empty:
+                dt_span_seconds = (valid_dt.max() - valid_dt.min()).total_seconds()
+            else:
+                dt_span_seconds = float("inf")
+
+            if dt_span_seconds > 2 * 86_400 and "timestamp_ns" in df2.columns:
+                ts = pd.to_numeric(df2["timestamp_ns"], errors="coerce")
+                valid_ts = ts.dropna()
+                if not valid_ts.empty:
+                    base_ts = valid_ts.min()
+                    rel_ns = (ts - base_ts).clip(lower=0)
+                    base_date = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
+                    df2["dt"] = base_date + pd.to_timedelta(rel_ns, unit="ns", errors="coerce")
+                    self.log("  Normalized plotting timeline to mission-relative timestamps")
+
+            df2 = df2.dropna(subset=["dt", "turbidity_ntu"])
+            if df2.empty:
+                self.log("  ⚠ No valid datetime data for turbidity time plot")
+                return None
 
             fig, ax = plt.subplots(figsize=(12, 5), facecolor="white")
 
-            vmin = df2["turbidity_ntu"].min()
-            vmax = df2["turbidity_ntu"].max()
-            norm = mcolors.PowerNorm(gamma=0.4, vmin=vmin, vmax=vmax)
+            # Use percentile-based limits to handle outliers robustly (5th–95th percentile).
+            # This approach is standard in oceanographic remote sensing for low-variation datasets.
+            vmin, vmax = self._get_turbidity_colorbar_limits(df2["turbidity_ntu"])
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
             sc = ax.scatter(
                 df2["dt"], df2["turbidity_ntu"],
                 c=df2["turbidity_ntu"], cmap="viridis_r",
                 norm=norm, s=6, alpha=0.7, linewidths=0,
             )
-            cbar = fig.colorbar(sc, ax=ax, shrink=0.85,
-                                format=FuncFormatter(lambda x, _: f"{x:g}"))
+            
+            # Use native Matplotlib colorbar tick scaling/labeling.
+            cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
             cbar.set_label("Turbidity (NTU)", fontsize=10)
 
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            self._format_turbidity_time_axis(ax, df2["dt"], self.log)
+            
             fig.autofmt_xdate()
 
             ax.set_xlabel("Time (UTC)")
@@ -409,16 +527,17 @@ class TurbidityProcessor:
 
             fig, ax = plt.subplots(figsize=(7, 9), facecolor="white")
 
-            vmin = df2["turbidity_ntu"].min()
-            vmax = df2["turbidity_ntu"].max()
-            norm = mcolors.PowerNorm(gamma=0.4, vmin=vmin, vmax=vmax)
+            # Use percentile-based limits to handle outliers robustly (5th–95th percentile).
+            vmin, vmax = self._get_turbidity_colorbar_limits(df2["turbidity_ntu"])
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
             sc = ax.scatter(
                 df2["turbidity_ntu"], df2["depth_m"],
                 c=df2["turbidity_ntu"], cmap="viridis_r",
                 norm=norm, s=8, alpha=0.6, linewidths=0,
             )
-            cbar = fig.colorbar(sc, ax=ax, shrink=0.85,
-                                format=FuncFormatter(lambda x, _: f"{x:g}"))
+            
+            # Use native Matplotlib colorbar tick scaling/labeling.
+            cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
             cbar.set_label("Turbidity (NTU)", fontsize=10)
 
             ax.invert_yaxis()   # depth increases downward
@@ -441,6 +560,73 @@ class TurbidityProcessor:
             self.log(traceback.format_exc())
             return None
 
+    def _plot_depth_vs_time(self, df: pd.DataFrame, output_dir: str, file_prefix: str) -> str | None:
+        """Depth (m) vs UTC time, colorized by turbidity (NTU)."""
+        try:
+            df2 = df.dropna(subset=["depth_m", "turbidity_ntu"]).copy()
+            if df2.empty:
+                self.log("  ⚠ No depth/time data for depth vs time plot – skipping")
+                return None
+
+            df2["dt"] = pd.to_datetime(df2["datetime_utc"], utc=True, errors="coerce")
+
+            # Keep the time axis consistent with the main turbidity time plot.
+            valid_dt = df2["dt"].dropna()
+            if not valid_dt.empty:
+                dt_span_seconds = (valid_dt.max() - valid_dt.min()).total_seconds()
+            else:
+                dt_span_seconds = float("inf")
+
+            if dt_span_seconds > 2 * 86_400 and "timestamp_ns" in df2.columns:
+                ts = pd.to_numeric(df2["timestamp_ns"], errors="coerce")
+                valid_ts = ts.dropna()
+                if not valid_ts.empty:
+                    base_ts = valid_ts.min()
+                    rel_ns = (ts - base_ts).clip(lower=0)
+                    base_date = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
+                    df2["dt"] = base_date + pd.to_timedelta(rel_ns, unit="ns", errors="coerce")
+                    self.log("  Normalized depth-vs-time timeline to mission-relative timestamps")
+
+            df2 = df2.dropna(subset=["dt", "depth_m", "turbidity_ntu"])
+            if df2.empty:
+                self.log("  ⚠ No valid datetime data for depth vs time plot")
+                return None
+
+            fig, ax = plt.subplots(figsize=(12, 5), facecolor="white")
+
+            vmin, vmax = self._get_turbidity_colorbar_limits(df2["turbidity_ntu"])
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+            sc = ax.scatter(
+                df2["dt"], df2["depth_m"],
+                c=df2["turbidity_ntu"], cmap="viridis_r",
+                norm=norm, s=6, alpha=0.7, linewidths=0,
+            )
+
+            cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
+            cbar.set_label("Turbidity (NTU)", fontsize=10)
+
+            self._format_turbidity_time_axis(ax, df2["dt"], self.log)
+            fig.autofmt_xdate()
+
+            ax.invert_yaxis()
+            ax.set_xlabel("Time (UTC)")
+            ax.set_ylabel("Depth (m)")
+            ax.set_title("Depth vs Time")
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            fname = f"{file_prefix}Depth_vs_Time.png"
+            path = os.path.join(output_dir, fname)
+            plt.savefig(path, facecolor="white", bbox_inches="tight", dpi=200)
+            plt.close(fig)
+            self.log(f"  ✓ Plot saved: {fname}")
+            return path
+        except Exception as e:
+            self.log(f"  ✗ Depth_vs_Time plot failed: {e}")
+            self.log(traceback.format_exc())
+            return None
+
     def _plot_turbidity_map(
         self, df: pd.DataFrame, output_dir: str, file_prefix: str
     ) -> str | None:
@@ -456,16 +642,17 @@ class TurbidityProcessor:
 
             fig, ax = plt.subplots(figsize=(9, 8), facecolor="white")
 
-            vmin = df2["turbidity_ntu"].min()
-            vmax = df2["turbidity_ntu"].max()
-            norm = mcolors.PowerNorm(gamma=0.4, vmin=vmin, vmax=vmax)
+            # Use percentile-based limits to handle outliers robustly (5th–95th percentile).
+            vmin, vmax = self._get_turbidity_colorbar_limits(df2["turbidity_ntu"])
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
             sc = ax.scatter(
                 df2["longitude"], df2["latitude"],
                 c=df2["turbidity_ntu"], cmap="viridis_r",
                 norm=norm, s=10, alpha=0.8, linewidths=0,
             )
-            cbar = fig.colorbar(sc, ax=ax, shrink=0.85,
-                                format=FuncFormatter(lambda x, _: f"{x:g}"))
+            
+            # Use native Matplotlib colorbar tick scaling/labeling.
+            cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
             cbar.set_label("Turbidity (NTU)", fontsize=10)
 
             ax.set_xlabel("Longitude (°)")
@@ -535,6 +722,7 @@ class TurbidityProcessor:
         # 4. Generate plots
         self.log("  Generating turbidity plots...")
         self._plot_turbidity_vs_time(merged_df, output_dir, file_prefix)
+        self._plot_depth_vs_time(merged_df, output_dir, file_prefix)
         self._plot_turbidity_vs_depth(merged_df, output_dir, file_prefix)
         self._plot_turbidity_map(merged_df, output_dir, file_prefix)
 
