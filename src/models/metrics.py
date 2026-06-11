@@ -1,6 +1,7 @@
 import os
 import re
 from typing import Dict, List, Tuple, Callable, Optional
+from datetime import date, datetime, time as dt_time, timedelta
 try:
     from PIL import Image
     from PIL.ExifTags import TAGS, GPSTAGS
@@ -454,6 +455,167 @@ class Metrics:
             "percentile_50": percentile_50,
             "percentile_75": percentile_75
         }
+
+    def _extract_dive_date_from_gps_data(self):
+        """Extract a representative dive date from image EXIF timestamps."""
+        if not self.gps_data:
+            return date.today()
+
+        try:
+            from dateutil import parser
+        except ImportError:
+            return date.today()
+
+        for point in self.gps_data[:200]:
+            dt_str = point.get('DateTime')
+            if not dt_str:
+                continue
+            try:
+                # EXIF commonly stores date as YYYY:MM:DD HH:MM:SS.
+                return parser.parse(str(dt_str).replace(':', '-', 2)).date()
+            except Exception:
+                continue
+
+        return date.today()
+
+    def load_nav_data_from_directory(self, nav_directory: str, dive_date=None) -> bool:
+        """
+        Load heading + altitude from a navigation directory (PHINS_INS + ADCP).
+
+        This supports the newer directory-based nav workflow used by footprint maps.
+        """
+        if not nav_directory or not os.path.isdir(nav_directory):
+            print(f"Navigation directory not found: {nav_directory}")
+            return False
+
+        try:
+            import numpy as np
+            import pandas as pd
+
+            phins_file = None
+            adcp_file = None
+
+            for root, _dirs, files in os.walk(nav_directory):
+                for file_name in files:
+                    low = file_name.lower()
+                    full_path = os.path.join(root, file_name)
+                    if phins_file is None and ('phins' in low and 'ins' in low):
+                        phins_file = full_path
+                    elif adcp_file is None and 'adcp' in low:
+                        adcp_file = full_path
+
+            if not phins_file:
+                print("No PHINS_INS navigation file found in navigation directory")
+                return False
+
+            def _read_nav_csv(path):
+                loaders = [
+                    lambda p: pd.read_csv(p),
+                    lambda p: pd.read_csv(p, header=0, skiprows=[1]),
+                    lambda p: pd.read_csv(p, sep=r'\s*,\s*', engine='python'),
+                ]
+                for loader in loaders:
+                    try:
+                        df = loader(path)
+                        df.columns = [str(c).strip() for c in df.columns]
+                        return df
+                    except Exception:
+                        continue
+                raise ValueError(f"Could not parse navigation file: {path}")
+
+            def _pick_column(columns, candidates):
+                col_map = {str(c).strip().lower(): c for c in columns}
+                for name in candidates:
+                    if name in col_map:
+                        return col_map[name]
+                return None
+
+            def _to_seconds(series):
+                values = pd.to_numeric(series, errors='coerce')
+                valid = values.dropna()
+                if valid.empty:
+                    return values
+                # Most nav files provide ms since midnight; convert when values are too large for seconds.
+                if valid.abs().max() > 172800:
+                    return values / 1000.0
+                return values
+
+            phins_df = _read_nav_csv(phins_file)
+
+            phins_time_col = _pick_column(phins_df.columns, ['time', 'mission_msecs', 'phins_time'])
+            heading_col = _pick_column(phins_df.columns, ['heading', 'phins_heading', 'heading_degs', 'compass_heading'])
+
+            if not phins_time_col or not heading_col:
+                print("PHINS file missing required time/heading columns")
+                return False
+
+            phins_seconds = _to_seconds(phins_df[phins_time_col])
+            phins_heading = pd.to_numeric(phins_df[heading_col], errors='coerce')
+
+            valid_phins = phins_seconds.notna() & phins_heading.notna()
+            if valid_phins.sum() == 0:
+                print("No valid PHINS time/heading rows found")
+                return False
+
+            phins_seconds = phins_seconds[valid_phins].astype(float)
+            phins_heading = phins_heading[valid_phins].astype(float).apply(self.normalize_heading)
+
+            interp_altitudes = np.full(len(phins_seconds), np.nan, dtype=float)
+            interp_depths = np.full(len(phins_seconds), np.nan, dtype=float)
+
+            if adcp_file:
+                try:
+                    adcp_df = _read_nav_csv(adcp_file)
+                    adcp_time_col = _pick_column(adcp_df.columns, ['time', 'mission_msecs', 'phins_time'])
+                    adcp_alt_col = _pick_column(adcp_df.columns, ['altitude', 'altitude_m'])
+                    adcp_depth_col = _pick_column(adcp_df.columns, ['depth', 'depth_m'])
+
+                    if adcp_time_col and adcp_alt_col:
+                        adcp_seconds = _to_seconds(adcp_df[adcp_time_col])
+                        adcp_alt = pd.to_numeric(adcp_df[adcp_alt_col], errors='coerce')
+                        adcp_depth = pd.to_numeric(adcp_df[adcp_depth_col], errors='coerce') if adcp_depth_col else None
+
+                        valid_adcp = adcp_seconds.notna() & adcp_alt.notna() & (adcp_alt > 0)
+                        if valid_adcp.sum() >= 2:
+                            x = adcp_seconds[valid_adcp].astype(float).values
+                            y = adcp_alt[valid_adcp].astype(float).values
+                            order = np.argsort(x)
+                            x = x[order]
+                            y = y[order]
+                            xp = phins_seconds.values
+                            interp_altitudes = np.interp(xp, x, y, left=np.nan, right=np.nan)
+
+                            if adcp_depth is not None:
+                                valid_depth = adcp_seconds.notna() & adcp_depth.notna()
+                                if valid_depth.sum() >= 2:
+                                    dx = adcp_seconds[valid_depth].astype(float).values
+                                    dy = adcp_depth[valid_depth].astype(float).values
+                                    dorder = np.argsort(dx)
+                                    dx = dx[dorder]
+                                    dy = dy[dorder]
+                                    interp_depths = np.interp(xp, dx, dy, left=np.nan, right=np.nan)
+                except Exception as e:
+                    print(f"Warning: Could not load ADCP altitude data: {e}")
+
+            base_date = dive_date if dive_date is not None else date.today()
+            base_dt = datetime.combine(base_date, dt_time.min)
+
+            self.nav_timestamps = []
+            for sec, alt, dep, hdg in zip(phins_seconds.values, interp_altitudes, interp_depths, phins_heading.values):
+                ts = base_dt + timedelta(seconds=float(sec))
+                alt_value = None if np.isnan(alt) else float(alt)
+                depth_value = None if np.isnan(dep) else float(dep)
+                self.nav_timestamps.append((ts, alt_value, depth_value, float(hdg)))
+
+            self.nav_timestamps.sort(key=lambda x: x[0])
+            print(f"Loaded {len(self.nav_timestamps)} navigation points from nav directory")
+            return len(self.nav_timestamps) > 0
+
+        except Exception as e:
+            print(f"Error loading navigation directory data: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return False
     
     def load_nav_data(self, nav_file_path: str) -> bool:
         """
@@ -843,6 +1005,80 @@ class Metrics:
             print(f"Error parsing mission time: {mission_time_str}, error: {e}")
             return None
 
+    def _parse_image_datetime(self, image_path_or_timestamp):
+        """Parse image datetime from path, filename, or EXIF datetime string."""
+        try:
+            from dateutil import parser
+        except ImportError:
+            return None
+
+        from pathlib import Path
+
+        if isinstance(image_path_or_timestamp, str) and ('\\' in image_path_or_timestamp or '/' in image_path_or_timestamp):
+            candidate = Path(image_path_or_timestamp).name
+        else:
+            candidate = image_path_or_timestamp
+
+        dt = None
+        if isinstance(candidate, str):
+            if 'T' in candidate and '_' in candidate:
+                try:
+                    parts = candidate.split('_')
+                    for part in parts:
+                        if 'T' in part:
+                            date_part, time_part = part.split('T')
+                            time_base = time_part.split('.')[0] if '.' in time_part else time_part
+                            if len(time_base) >= 6:
+                                hours = time_base[0:2]
+                                minutes = time_base[2:4]
+                                seconds = time_base[4:6]
+                                dt = parser.parse(f"{date_part} {hours}:{minutes}:{seconds}")
+                                break
+                except Exception:
+                    dt = None
+
+            if dt is None and (':' in candidate or '-' in candidate):
+                try:
+                    # Handle EXIF format first.
+                    dt = parser.parse(candidate.replace(':', '-', 2))
+                except Exception:
+                    dt = None
+
+        return dt
+
+    def _find_closest_nav_entry(self, dt, tolerance_seconds=3.0):
+        """Return closest nav tuple, allowing +/- 1 day shift for over-midnight/date-offset runs."""
+        if dt is None or not hasattr(self, 'nav_timestamps') or not self.nav_timestamps:
+            return None
+
+        import datetime as _dt_mod
+
+        tolerance = _dt_mod.timedelta(seconds=tolerance_seconds)
+        candidates = [dt, dt - _dt_mod.timedelta(days=1), dt + _dt_mod.timedelta(days=1)]
+
+        best_entry = None
+        best_diff = None
+
+        for candidate_dt in candidates:
+            local_best_entry = None
+            local_best_diff = tolerance
+
+            for nav_entry in self.nav_timestamps:
+                if len(nav_entry) < 2:
+                    continue
+                ts = nav_entry[0]
+                diff = abs(ts - candidate_dt)
+                if diff < local_best_diff:
+                    local_best_diff = diff
+                    local_best_entry = nav_entry
+
+            if local_best_entry is not None:
+                if best_diff is None or local_best_diff < best_diff:
+                    best_diff = local_best_diff
+                    best_entry = local_best_entry
+
+        return best_entry
+
     def get_altitude_from_nav(self, image_path_or_timestamp):
         """
         Get altitude from navigation data based on image path or timestamp
@@ -856,100 +1092,14 @@ class Metrics:
         if not hasattr(self, 'nav_timestamps') or not self.nav_timestamps:
             return None
             
-        try:
-            import datetime
-            from dateutil import parser
-        except ImportError as e:
-            print(f"Required modules not available: {e}")
+        dt = self._parse_image_datetime(image_path_or_timestamp)
+        nav_entry = self._find_closest_nav_entry(dt, tolerance_seconds=3.0)
+        if nav_entry is None:
             return None
-        from pathlib import Path
-        
-        # If we're passed a full path, extract the filename
-        if isinstance(image_path_or_timestamp, str) and ('\\' in image_path_or_timestamp or '/' in image_path_or_timestamp):
-            filename = Path(image_path_or_timestamp).name
-        else:
-            filename = image_path_or_timestamp
-        
-        # First try to parse it as a timestamp directly
-        dt = None
-        if isinstance(filename, str):
-            # Try to extract timestamp from VOYIS filename pattern
-            # Example: ESC_stills_processed_PPS_2024-06-27T074938.458700_2170.jpg
-            if 'T' in filename and '_' in filename:
-                try:
-                    parts = filename.split('_')
-                    # Look for the part with a T in it
-                    for part in parts:
-                        if 'T' in part:
-                            # Format: 2024-06-27T074938.458700
-                            date_part, time_part = part.split('T')
-                            
-                            # Handle time with or without milliseconds
-                            if '.' in time_part:
-                                time_base = time_part.split('.')[0]
-                            else:
-                                time_base = time_part
-                                
-                            # Format time with proper separators (HH:MM:SS)
-                            if len(time_base) >= 6:  # At least HHMMSS
-                                hours = time_base[0:2]
-                                minutes = time_base[2:4]
-                                seconds = time_base[4:6]
-                                formatted_time = f"{hours}:{minutes}:{seconds}"
-                                dt = parser.parse(f"{date_part} {formatted_time}")
-                                break
-                except Exception as e:
-                    # Try direct parsing if filename processing failed
-                    try:
-                        dt = parser.parse(filename)
-                    except:
-                        dt = None
-        
-            # Direct timestamp parsing if format extraction failed
-            if dt is None and isinstance(filename, str) and (':' in filename or '-' in filename):
-                try:
-                    dt = parser.parse(filename)
-                except:
-                    dt = None
-        
-            # If we have a datetime object, find the closest match in navigation data
-            if dt:
-                # Find closest timestamp within tolerance (3 seconds)
-                tolerance_seconds = 3.0  # Set to 3 seconds as requested
-                tolerance = datetime.timedelta(seconds=tolerance_seconds)
-                closest_timestamp = None
-                closest_altitude = None
-                closest_diff = tolerance
-                
-                for nav_entry in self.nav_timestamps:
-                    # Handle different formats: (timestamp, altitude), (timestamp, altitude, heading), (timestamp, altitude, depth, heading)
-                    if len(nav_entry) == 2:
-                        timestamp, altitude = nav_entry
-                    elif len(nav_entry) == 3:
-                        timestamp, altitude, heading = nav_entry
-                    elif len(nav_entry) == 4:
-                        timestamp, altitude, depth, heading = nav_entry
-                    else:
-                        continue
-                        
-                    diff = abs(timestamp - dt)
-                    
-                    # If this timestamp is closer than our previous best match
-                    if diff < closest_diff:
-                        closest_diff = diff
-                        closest_timestamp = timestamp
-                        closest_altitude = altitude
-                        
-                        # If very close match, we can stop early
-                        if diff.total_seconds() < 0.1:
-                            break
-                
-                # Only return if within tolerance
-                if closest_timestamp and closest_diff <= tolerance:
-                    return closest_altitude
-                
-            # If we get here, no altitude was found
-            return None
+
+        if len(nav_entry) >= 2:
+            return nav_entry[1]
+        return None
     
     def determine_processing_type(self, image_path: str) -> str:
         """
@@ -1043,8 +1193,9 @@ class Metrics:
         
         return 'unknown'
     
-    def create_image_metrics_csv(self, input_folder: str, output_folder: str, 
-                                nav_file: str = None, 
+    def create_image_metrics_csv(self, input_folder: str, output_folder: str,
+                                nav_file: str = None,
+                                nav_directory: str = None,
                                 progress_callback: Callable = None,
                                 file_prefix: str = "Image_") -> Optional[str]:
         """
@@ -1065,18 +1216,6 @@ class Metrics:
             import csv
             from pathlib import Path
             
-            # Load navigation data if provided
-            if nav_file and os.path.exists(nav_file):
-                self.load_nav_data(nav_file)
-            else:
-                # If no nav file provided, try to find navigation files in common locations
-                print("No navigation file provided, searching for navigation files in common locations...")
-                nav_file_found = self._find_and_load_navigation_file(input_folder, output_folder)
-                if nav_file_found:
-                    print(f"Found and loaded navigation file: {nav_file_found}")
-                else:
-                    print("No navigation files found in common locations")
-            
             # Check if GPS data is already available from a previous analyze_directory call
             if not self.gps_data:
                 # GPS data not available, need to extract it
@@ -1092,6 +1231,22 @@ class Metrics:
                 # GPS data is already available, just update progress
                 if progress_callback:
                     progress_callback(25, f"Using existing GPS data from {len(self.gps_data)} images...")
+
+            # Load navigation data after GPS extraction so we can use EXIF date as dive-date hint.
+            dive_date = self._extract_dive_date_from_gps_data()
+            if nav_directory and os.path.isdir(nav_directory):
+                print(f"Loading navigation from directory: {nav_directory}")
+                self.load_nav_data_from_directory(nav_directory, dive_date=dive_date)
+            elif nav_file and os.path.exists(nav_file):
+                self.load_nav_data(nav_file)
+            else:
+                # If no nav source provided, try to find navigation files in common locations
+                print("No navigation source provided, searching for navigation files in common locations...")
+                nav_file_found = self._find_and_load_navigation_file(input_folder, output_folder)
+                if nav_file_found:
+                    print(f"Found and loaded navigation file: {nav_file_found}")
+                else:
+                    print("No navigation files found in common locations")
             
             if progress_callback:
                 progress_callback(30, "Creating master CSV structure...")
@@ -1126,21 +1281,41 @@ class Metrics:
                 width = gps_point.get('width', '')
                 height = gps_point.get('height', '')
                 
+                # Resolve altitude from navigation data if available.
+                resolved_altitude = altitude
+                if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
+                    try:
+                        nav_altitude = None
+                        if datetime_original:
+                            nav_altitude = self.get_altitude_from_nav(datetime_original)
+                        if nav_altitude is None and file_path:
+                            nav_altitude = self.get_altitude_from_nav(file_path)
+                        if nav_altitude is not None:
+                            resolved_altitude = nav_altitude
+                            gps_point['altitude'] = nav_altitude
+                    except Exception:
+                        pass
+
                 # Try to get heading from navigation data if available
                 heading = ''
-                if hasattr(self, 'nav_timestamps') and self.nav_timestamps and file_path:
+                if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
                     try:
-                        # Extract timestamp from filename for nav matching
-                        heading = self.get_heading_from_nav(file_path)
+                        if datetime_original:
+                            heading = self.get_heading_from_nav(datetime_original)
+                        if (heading == '' or heading is None) and file_path:
+                            heading = self.get_heading_from_nav(file_path)
                     except:
                         pass
                 
                 # Try to get depth from navigation data if available
                 depth = ''
-                if hasattr(self, 'nav_timestamps') and self.nav_timestamps and file_path:
+                if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
                     try:
-                        # Extract timestamp from filename for nav matching
-                        depth_value = self.get_depth_from_nav(file_path)
+                        depth_value = None
+                        if datetime_original:
+                            depth_value = self.get_depth_from_nav(datetime_original)
+                        if depth_value is None and file_path:
+                            depth_value = self.get_depth_from_nav(file_path)
                         if depth_value is not None:
                             depth = depth_value
                     except:
@@ -1152,7 +1327,7 @@ class Metrics:
                     'file_path': file_path,
                     'latitude': latitude,
                     'longitude': longitude,
-                    'altitude': altitude,
+                    'altitude': resolved_altitude,
                     'depth': depth,
                     'heading': heading,
                     'processing_type': processing_type,
@@ -1216,89 +1391,15 @@ class Metrics:
         if not hasattr(self, 'nav_timestamps') or not self.nav_timestamps:
             return ''
             
-        try:
-            import datetime
-            from dateutil import parser
-        except ImportError:
+        dt = self._parse_image_datetime(image_path_or_timestamp)
+        nav_entry = self._find_closest_nav_entry(dt, tolerance_seconds=3.0)
+        if nav_entry is None:
             return ''
-            
-        from pathlib import Path
-        
-        # If we're passed a full path, extract the filename
-        if isinstance(image_path_or_timestamp, str) and ('\\' in image_path_or_timestamp or '/' in image_path_or_timestamp):
-            filename = Path(image_path_or_timestamp).name
-        else:
-            filename = image_path_or_timestamp
-        
-        # Try to extract timestamp from VOYIS filename pattern
-        dt = None
-        if isinstance(filename, str):
-            # Try to extract timestamp from VOYIS filename pattern
-            # Example: ESC_stills_processed_PPS_2024-06-27T074938.458700_2170.jpg
-            if 'T' in filename and '_' in filename:
-                try:
-                    parts = filename.split('_')
-                    # Look for the part with a T in it
-                    for part in parts:
-                        if 'T' in part:
-                            # Format: 2024-06-27T074938.458700
-                            date_part, time_part = part.split('T')
-                            
-                            # Handle time with or without milliseconds
-                            if '.' in time_part:
-                                time_base = time_part.split('.')[0]
-                            else:
-                                time_base = time_part
-                                
-                            # Format time with proper separators (HH:MM:SS)
-                            if len(time_base) >= 6:  # At least HHMMSS
-                                hours = time_base[0:2]
-                                minutes = time_base[2:4]
-                                seconds = time_base[4:6]
-                                formatted_time = f"{hours}:{minutes}:{seconds}"
-                                dt = parser.parse(f"{date_part} {formatted_time}")
-                                break
-                except Exception:
-                    try:
-                        dt = parser.parse(filename)
-                    except:
-                        dt = None
-        
-        # If we have a datetime object, find the closest match in navigation data
-        if dt and hasattr(self, 'nav_timestamps'):
-            # Find closest timestamp within tolerance (3 seconds)
-            tolerance_seconds = 3.0
-            tolerance = datetime.timedelta(seconds=tolerance_seconds)
-            closest_heading = ''
-            closest_diff = tolerance
-            
-            for nav_entry in self.nav_timestamps:
-                # Handle different formats: (timestamp, altitude), (timestamp, altitude, heading), (timestamp, altitude, depth, heading)
-                if len(nav_entry) == 2:
-                    timestamp, altitude = nav_entry
-                    heading = ''  # No heading available in old format
-                elif len(nav_entry) == 3:
-                    timestamp, altitude, heading = nav_entry
-                elif len(nav_entry) == 4:
-                    timestamp, altitude, depth, heading = nav_entry
-                else:
-                    continue
-                    
-                diff = abs(timestamp - dt)
-                
-                # If this timestamp is closer than our previous best match
-                if diff < closest_diff:
-                    closest_diff = diff
-                    closest_heading = heading if len(nav_entry) >= 3 else ''
-                    
-                    # If very close match, we can stop early
-                    if diff.total_seconds() < 0.1:
-                        break
-            
-            # Only return if within tolerance
-            if closest_diff <= tolerance:
-                return closest_heading
-                
+
+        if len(nav_entry) == 3:
+            return nav_entry[2] if nav_entry[2] is not None else ''
+        if len(nav_entry) >= 4:
+            return nav_entry[3] if nav_entry[3] is not None else ''
         return ''
     
     def update_csv_with_footprint_data(self, csv_path: str, footprint_data: Dict) -> bool:
@@ -1454,90 +1555,13 @@ class Metrics:
         if not hasattr(self, 'nav_timestamps') or not self.nav_timestamps:
             return None
             
-        try:
-            import datetime
-            from dateutil import parser
-        except ImportError:
+        dt = self._parse_image_datetime(image_path_or_timestamp)
+        nav_entry = self._find_closest_nav_entry(dt, tolerance_seconds=3.0)
+        if nav_entry is None:
             return None
-            
-        from pathlib import Path
-        
-        # If we're passed a full path, extract the filename
-        if isinstance(image_path_or_timestamp, str) and ('\\' in image_path_or_timestamp or '/' in image_path_or_timestamp):
-            filename = Path(image_path_or_timestamp).name
-        else:
-            filename = image_path_or_timestamp
-        
-        # Try to extract timestamp from VOYIS filename pattern
-        dt = None
-        if isinstance(filename, str):
-            # Try to extract timestamp from VOYIS filename pattern
-            # Example: ESC_stills_processed_PPS_2024-06-27T074938.458700_2170.jpg
-            if 'T' in filename and '_' in filename:
-                try:
-                    parts = filename.split('_')
-                    # Look for the part with a T in it
-                    for part in parts:
-                        if 'T' in part:
-                            # Format: 2024-06-27T074938.458700
-                            date_part, time_part = part.split('T')
-                            
-                            # Handle time with or without milliseconds
-                            if '.' in time_part:
-                                time_base = time_part.split('.')[0]
-                            else:
-                                time_base = time_part
-                                
-                            # Format time with proper separators (HH:MM:SS)
-                            if len(time_base) >= 6:  # At least HHMMSS
-                                hours = time_base[0:2]
-                                minutes = time_base[2:4]
-                                seconds = time_base[4:6]
-                                formatted_time = f"{hours}:{minutes}:{seconds}"
-                                dt = parser.parse(f"{date_part} {formatted_time}")
-                                break
-                except Exception:
-                    try:
-                        dt = parser.parse(filename)
-                    except:
-                        dt = None
-        
-        # If we have a datetime object, find the closest match in navigation data
-        if dt and hasattr(self, 'nav_timestamps'):
-            # Find closest timestamp within tolerance (3 seconds)
-            tolerance_seconds = 3.0
-            tolerance = datetime.timedelta(seconds=tolerance_seconds)
-            closest_depth = None
-            closest_diff = tolerance
-            
-            for nav_entry in self.nav_timestamps:
-                # Handle different formats: (timestamp, altitude), (timestamp, altitude, heading), (timestamp, altitude, depth, heading)
-                if len(nav_entry) == 2:
-                    timestamp, altitude = nav_entry
-                    depth = None  # No depth available in old format
-                elif len(nav_entry) == 3:
-                    timestamp, altitude, heading = nav_entry
-                    depth = None  # No depth available in 3-tuple format
-                elif len(nav_entry) == 4:
-                    timestamp, altitude, depth, heading = nav_entry
-                else:
-                    continue
-                    
-                diff = abs(timestamp - dt)
-                
-                # If this timestamp is closer than our previous best match
-                if diff < closest_diff:
-                    closest_diff = diff
-                    closest_depth = depth if len(nav_entry) == 4 else None
-                    
-                    # If very close match, we can stop early
-                    if diff.total_seconds() < 0.1:
-                        break
-            
-            # Only return if within tolerance
-            if closest_diff <= tolerance:
-                return closest_depth
-                
+
+        if len(nav_entry) >= 4:
+            return nav_entry[2]
         return None
 
 

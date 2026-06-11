@@ -414,6 +414,12 @@ class ProcessingController:
                                 if file_path and os.path.exists(file_path):
                                     nav_file = file_path
                                     break
+
+                        nav_directory = None
+                        if hasattr(self, 'nav_directory_path'):
+                            dir_path = self.nav_directory_path.get()
+                            if dir_path and os.path.isdir(dir_path):
+                                nav_directory = dir_path
                         
                         # Use dive prefix if available
                         dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "Image_"
@@ -431,7 +437,8 @@ class ProcessingController:
                             csv_path = self.metrics.create_image_metrics_csv(
                                 input_folder, 
                                 output_folder, 
-                                nav_file, 
+                                nav_file,
+                                nav_directory=nav_directory,
                                 progress_callback=lambda p, msg="Creating master CSV...": self.update_progress(p, msg),
                                 file_prefix=dive_prefix
                             )
@@ -901,27 +908,6 @@ class ProcessingController:
                 
                 if map_file and os.path.exists(map_file):
                     self.log_message(f"  └─ ✓ Location map created: {os.path.basename(map_file)}")
-                    
-                    # Also create GIS exports
-                    try:
-                        result_files = self.altitude_map.export_to_gis_formats(
-                            self.metrics.gps_data,
-                            output_folder,
-                            file_prefix=dive_prefix
-                        )
-                        
-                        if 'csv' in result_files:
-                            csv_file = os.path.basename(result_files['csv'])
-                            if csv_file == "Image_Metrics.csv":
-                                self.log_message(f"       Using existing CSV: {csv_file}")
-                            else:
-                                self.log_message(f"       Analysis CSV export: {csv_file}")
-                        
-                        if 'shapefile' in result_files:
-                            self.log_message(f"       Shapefile export: {os.path.basename(result_files['shapefile'])}")
-                            
-                    except Exception as export_error:
-                        self.log_message(f"       Warning: GIS export failed: {export_error}")
                 else:
                     self.log_message("  └─ ✗ Location map generation failed")
                     

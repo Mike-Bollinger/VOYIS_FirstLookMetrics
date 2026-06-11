@@ -849,6 +849,8 @@ class FootprintMap:
                     nav_altitude = nav_match['altitude']
 
                 point_altitude = nav_altitude if nav_altitude is not None else point['altitude']
+                # Persist resolved altitude so CSV update stages keep nav-derived values.
+                point['altitude'] = point_altitude
                 
                 # Calculate footprint dimensions using resolved altitude
                 width, height = self._calculate_footprint(point_altitude)
@@ -3278,6 +3280,7 @@ class FootprintMap:
                 footprint_data[filename]['footprint_width'] = footprint_width
                 footprint_data[filename]['footprint_height'] = footprint_height
                 footprint_data[filename]['footprint_area'] = footprint_area
+                footprint_data[filename]['altitude'] = altitude
             
             # Add overlap data if available
             if hasattr(self, 'vertical_overlap_stats') and self.vertical_overlap_stats:

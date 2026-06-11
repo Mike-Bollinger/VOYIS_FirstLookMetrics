@@ -126,7 +126,7 @@ class AltitudeMap:
             
             # Export data to GIS formats first
             try:
-                self.export_to_gis_formats(export_data, output_path)
+                self.export_to_gis_formats(export_data, output_path, file_prefix=file_prefix)
             except Exception as e:
                 print(f"Warning: Failed to export GIS formats: {e}")
             
@@ -492,6 +492,9 @@ class AltitudeMap:
             # Create output directory if it doesn't exist
             os.makedirs(output_path, exist_ok=True)
             
+            # Build dataframe once for shapefile export.
+            df = pd.DataFrame(gps_data)
+
             # First check if the standard CSV already exists - don't overwrite it
             standard_csv = os.path.join(output_path, f"{file_prefix}Metrics.csv")
             if os.path.exists(standard_csv):
@@ -499,14 +502,9 @@ class AltitudeMap:
                 result_files['csv'] = standard_csv
                 print(f"Using existing CSV file: {standard_csv}")
             else:
-                # Create a separate analysis CSV with a different name to avoid conflicts
-                df = pd.DataFrame(gps_data)
-                
-                # Export CSV with Analysis_ prefix to distinguish it
-                csv_path = os.path.join(output_path, csv_filename)
-                df.to_csv(csv_path, index=False)
-                result_files['csv'] = csv_path
-                print(f"CSV exported successfully: {csv_path}")
+                # Do not create a secondary CSV; this project should maintain a single
+                # dive-designated Image_Metrics CSV managed by the main metrics pipeline.
+                print(f"Master CSV not found ({standard_csv}); skipping extra CSV export")
             
             # Export Shapefile if geopandas is available
             if GEOPANDAS_AVAILABLE:
