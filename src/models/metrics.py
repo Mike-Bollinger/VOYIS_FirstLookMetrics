@@ -1251,12 +1251,40 @@ class Metrics:
             if progress_callback:
                 progress_callback(30, "Creating master CSV structure...")
             
+            # Debug: Log navigation data status
+            if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
+                print(f"\n{'='*60}")
+                print(f"NAVIGATION DATA STATUS")
+                print(f"{'='*60}")
+                print(f"Navigation data available: {len(self.nav_timestamps)} points")
+                if len(self.nav_timestamps) > 0:
+                    first_nav = self.nav_timestamps[0]
+                    last_nav = self.nav_timestamps[-1]
+                    print(f"Nav time range: {first_nav[0]} to {last_nav[0]}")
+                    print(f"First nav entry structure: {len(first_nav)} elements")
+                    print(f"First nav entry: {first_nav}")
+                    if len(first_nav) >= 4:
+                        print(f"  - Timestamp: {first_nav[0]}")
+                        print(f"  - Altitude: {first_nav[1]}")
+                        print(f"  - Depth: {first_nav[2]}")
+                        print(f"  - Heading: {first_nav[3]}")
+                    print(f"{'='*60}\n")
+            else:
+                print("\n{'='*60}")
+                print("WARNING: No navigation data loaded!")
+                print("Heading and depth columns will be empty.")
+                print(f"{'='*60}\n")
+            
             # Create the master CSV path with prefix
             csv_filename = f"{file_prefix}Metrics.csv"
             csv_path = os.path.join(output_folder, csv_filename)
             
             # Prepare data for CSV
             csv_data = []
+            
+            # Track navigation matching statistics
+            nav_match_count = 0
+            nav_miss_count = 0
             
             for i, gps_point in enumerate(self.gps_data):
                 if progress_callback and i % 100 == 0:
@@ -1298,28 +1326,59 @@ class Metrics:
 
                 # Try to get heading from navigation data if available
                 heading = ''
+                depth = ''
+                nav_matched = False
+                
                 if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
                     try:
+                        # Debug: log first few attempts
+                        if i < 3:
+                            print(f"\nProcessing image #{i+1}: {filename}")
+                            print(f"  datetime_original: {datetime_original}")
+                        
                         if datetime_original:
                             heading = self.get_heading_from_nav(datetime_original)
+                            depth_value = self.get_depth_from_nav(datetime_original)
+                            
+                            if i < 3:
+                                print(f"  From datetime - heading: {heading}, depth: {depth_value}")
+                        else:
+                            if i < 3:
+                                print(f"  No datetime_original, trying file_path")
+                        
                         if (heading == '' or heading is None) and file_path:
                             heading = self.get_heading_from_nav(file_path)
-                    except:
-                        pass
-                
-                # Try to get depth from navigation data if available
-                depth = ''
-                if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
-                    try:
-                        depth_value = None
-                        if datetime_original:
-                            depth_value = self.get_depth_from_nav(datetime_original)
+                            if i < 3:
+                                print(f"  From file_path - heading: {heading}")
+                                
                         if depth_value is None and file_path:
                             depth_value = self.get_depth_from_nav(file_path)
+                            if i < 3:
+                                print(f"  From file_path - depth: {depth_value}")
+                        
                         if depth_value is not None:
                             depth = depth_value
-                    except:
-                        pass
+                            
+                        # Track if we got nav data for this image
+                        if heading != '' or depth != '':
+                            nav_matched = True
+                            nav_match_count += 1
+                        else:
+                            nav_miss_count += 1
+                            # Debug: log first few misses
+                            if nav_miss_count <= 5:
+                                print(f"\nNav miss #{nav_miss_count}: {filename}")
+                                print(f"  datetime_original: {datetime_original}")
+                                print(f"  heading result: '{heading}'")
+                                print(f"  depth result: '{depth}'")
+                    except Exception as e:
+                        nav_miss_count += 1
+                        if nav_miss_count <= 5:
+                            print(f"\nNav ERROR for {filename}: {type(e).__name__}: {e}")
+                            import traceback
+                            print(traceback.format_exc())
+                else:
+                    nav_miss_count += 1
                 
                 # Create row data
                 row_data = {
@@ -1353,7 +1412,10 @@ class Metrics:
                     'visibility_confidence': '',
                     
                     # Highlight selector column
-                    'is_highlight': ''
+                    'is_highlight': '',
+                    
+                    # Turbidity column (to be populated by turbidity processor)
+                    'turbidity_ntu': ''
                 }
                 
                 csv_data.append(row_data)
@@ -1364,6 +1426,17 @@ class Metrics:
             
             df = pd.DataFrame(csv_data)
             df.to_csv(csv_path, index=False)
+            
+            # Log navigation matching statistics
+            total_images = len(csv_data)
+            if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
+                match_rate = (nav_match_count / total_images * 100) if total_images > 0 else 0
+                print(f"\nNavigation Matching Summary:")
+                print(f"  Total images: {total_images}")
+                print(f"  Nav matched: {nav_match_count} ({match_rate:.1f}%)")
+                print(f"  Nav missed: {nav_miss_count} ({100-match_rate:.1f}%)")
+                if nav_miss_count > 0:
+                    print(f"  Note: Missing nav data may be due to timestamp mismatches")
             
             if progress_callback:
                 progress_callback(100, f"Master CSV created: {os.path.basename(csv_path)}")
@@ -1382,8 +1455,10 @@ class Metrics:
         Get heading from navigation data based on image path or timestamp
         Similar to get_altitude_from_nav but returns heading instead
         
+        Navigation data structure: (timestamp, altitude, depth, heading)
+        
         Args:
-            image_path_or_timestamp: Image path or timestamp string
+            image_path_or_timestamp: Image_path or timestamp string
             
         Returns:
             Heading value or empty string if no match found
@@ -1392,14 +1467,18 @@ class Metrics:
             return ''
             
         dt = self._parse_image_datetime(image_path_or_timestamp)
+        if dt is None:
+            return ''
+            
         nav_entry = self._find_closest_nav_entry(dt, tolerance_seconds=3.0)
         if nav_entry is None:
             return ''
 
-        if len(nav_entry) == 3:
-            return nav_entry[2] if nav_entry[2] is not None else ''
+        # Nav structure is always (timestamp, altitude, depth, heading)
         if len(nav_entry) >= 4:
-            return nav_entry[3] if nav_entry[3] is not None else ''
+            heading_value = nav_entry[3]
+            if heading_value is not None:
+                return heading_value
         return ''
     
     def update_csv_with_footprint_data(self, csv_path: str, footprint_data: Dict) -> bool:
@@ -1546,6 +1625,8 @@ class Metrics:
         Get depth from navigation data based on image path or timestamp
         Similar to get_altitude_from_nav but returns depth instead
         
+        Navigation data structure: (timestamp, altitude, depth, heading)
+        
         Args:
             image_path_or_timestamp: Image path or timestamp string
             
@@ -1556,12 +1637,18 @@ class Metrics:
             return None
             
         dt = self._parse_image_datetime(image_path_or_timestamp)
+        if dt is None:
+            return None
+            
         nav_entry = self._find_closest_nav_entry(dt, tolerance_seconds=3.0)
         if nav_entry is None:
             return None
 
+        # Nav structure is always (timestamp, altitude, depth, heading)
         if len(nav_entry) >= 4:
-            return nav_entry[2]
+            depth_value = nav_entry[2]
+            if depth_value is not None:
+                return depth_value
         return None
 
 

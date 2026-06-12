@@ -446,13 +446,17 @@ class ProcessingController:
                         if csv_path:
                             self.log_message(f"✓ Created Image_Metrics.csv: {os.path.basename(csv_path)}")
                             
-                            # Check for old non-prefixed CSV and warn user
+                            # Check for old non-prefixed CSV and delete it
                             if dive_prefix != "Image_":
                                 old_csv = os.path.join(output_folder, "Image_Metrics.csv")
                                 if os.path.exists(old_csv) and old_csv != csv_path:
-                                    self.log_message(f"⚠ Found old non-prefixed CSV: Image_Metrics.csv")
-                                    self.log_message(f"   Using prefixed version: {os.path.basename(csv_path)}")
-                                    self.log_message(f"   You can safely delete the old Image_Metrics.csv file")
+                                    try:
+                                        os.remove(old_csv)
+                                        self.log_message(f"✓ Removed old non-prefixed Image_Metrics.csv")
+                                        self.log_message(f"   Now using: {os.path.basename(csv_path)}")
+                                    except Exception as del_error:
+                                        self.log_message(f"⚠ Could not delete old Image_Metrics.csv: {del_error}")
+                                        self.log_message(f"   You can manually delete: {old_csv}")
                         else:
                             self.log_message("⚠ Failed to create Image_Metrics.csv")
                         

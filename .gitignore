@@ -68,3 +68,6 @@ src/utils/__pycache__/__init__.cpython-312.pyc
 src/utils/__pycache__/csv_to_shapefile.cpython-312.pyc
 src/utils/__pycache__/file_utils.cpython-312.pyc
 src/utils/__pycache__/nav_to_shapefile.cpython-312.pyc
+src/models/__pycache__/__init__.cpython-311.pyc
+src/models/__pycache__/metrics.cpython-311.pyc
+src/models/__pycache__/nav_merger.cpython-311.pyc

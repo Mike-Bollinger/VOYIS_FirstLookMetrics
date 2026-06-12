@@ -116,7 +116,7 @@ class AppWindow(UIComponents, ProcessingController):
         # Set default pre-trained model path
         try:
             app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-            default_model = os.path.join(app_root, "v_a_pre-trained_models", "visibility_model_20250402.h5")
+            default_model = os.path.join(app_root, "v_a_pre-trained_models", "EN2501_visibility_model_20251204_111315.h5")
             if os.path.exists(default_model):
                 self.model_path.set(default_model)
         except:
