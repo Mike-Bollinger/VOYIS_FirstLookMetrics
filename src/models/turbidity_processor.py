@@ -28,11 +28,13 @@ from matplotlib.ticker import FuncFormatter
 # ── CDR byte offsets ─────────────────────────────────────────────────────────
 TURB_TOPIC  = "/r620/ros_remus/ds_msgs/turbidity"
 STAT_TOPIC  = "/r620/ros_remus/status"
+BATHY_TOPIC = "/r620/ros_remus/bathymetry"
 
 NTU_OFFSET   = 44   # float64 NTU in turbidity payload
 STAT_LAT_OFF = 28   # float64 latitude  in status payload
 STAT_LON_OFF = 36   # float64 longitude in status payload
 STAT_DEP_OFF = 52   # float64 depth (m, negative below surface) in status payload
+BATHY_ALT_OFF = 44  # float64 altitude (m) in bathymetry payload
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -95,10 +97,104 @@ class TurbidityProcessor:
         )
         self.log(f"  Found {len(txt_files)} TURBIDITY.txt file(s) under {root_dir}")
         return txt_files
+    
+    def find_altitude_source_files(self, root_dir: str) -> list[Path]:
+        """Recursively find ADCP.txt and BATHY.txt files for altitude data."""
+        root = Path(root_dir)
+        alt_files = []
+        
+        # Find ADCP files (preferred source for altitude)
+        adcp_files = sorted(
+            path for path in root.rglob("*")
+            if path.is_file() and path.name.upper() == "ADCP.TXT"
+        )
+        alt_files.extend(adcp_files)
+        
+        # Find BATHY files
+        bathy_files = sorted(
+            path for path in root.rglob("*")
+            if path.is_file() and path.name.upper() == "BATHY.TXT"
+        )
+        alt_files.extend(bathy_files)
+        
+        self.log(f"  Found {len(alt_files)} altitude source file(s) under {root_dir}")
+        return alt_files
 
     # ── Bag parsing ───────────────────────────────────────────────────────────
+    def _parse_altitude_from_nav_file(self, nav_path: Path) -> list[dict]:
+        """
+        Parse altitude data from ADCP.txt or BATHY.txt files.
+        
+        ADCP.txt expected columns: mission_msecs, altitude, ...
+        BATHY.txt expected columns: latitude, longitude, depth, altitude
+        
+        Returns
+        -------
+        alt_rows : list of {timestamp_ns, altitude_m}
+        """
+        alt_rows: list[dict] = []
+        
+        try:
+            with open(nav_path, "r", newline="", encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f, skipinitialspace=True)
+                header_cols = set(reader.fieldnames or [])
+                
+                # Check if required columns exist
+                if "altitude" not in header_cols:
+                    return alt_rows
+                
+                has_mission_msecs = "mission_msecs" in header_cols
+                
+                if not has_mission_msecs:
+                    # BATHY.txt doesn't have timestamps - skip it
+                    return alt_rows
+                
+                bad_rows = 0
+                for row in reader:
+                    try:
+                        mission_msecs = float(row["mission_msecs"])
+                        ts = int(round(mission_msecs * 1_000_000.0))
+                        
+                        altitude = float(row["altitude"])
+                        
+                        # Validate altitude is realistic
+                        if 0.0 <= altitude <= 10000.0:
+                            alt_rows.append({
+                                "timestamp_ns": ts,
+                                "altitude_m": altitude,
+                            })
+                    except (TypeError, ValueError, KeyError):
+                        bad_rows += 1
+                
+                if bad_rows > 0:
+                    self.log(f"  [WARN] {nav_path.name}: skipped {bad_rows} malformed altitude row(s)")
+        
+        except Exception as e:
+            self.log(f"  [ERROR] Failed to read altitude from {nav_path.name}: {e}")
+        
+        return alt_rows
 
-    def _parse_single_bag(self, mcap_path: Path) -> tuple[list[dict], list[dict]]:
+    def _parse_all_altitude_source_files(self, alt_files: list[Path]) -> pd.DataFrame:
+        """Parse all altitude source files; return alt_df."""
+        all_alt: list[dict] = []
+        
+        for path in alt_files:
+            self.log(f"  Parsing altitude from: {path.name}")
+            a_rows = self._parse_altitude_from_nav_file(path)
+            self.log(f"    → {len(a_rows):,} altitude rows")
+            all_alt.extend(a_rows)
+        
+        if not all_alt:
+            return pd.DataFrame()
+        
+        alt_df = pd.DataFrame(all_alt).sort_values("timestamp_ns").reset_index(drop=True)
+        # Remove duplicates, keeping the first occurrence (ADCP preferred over BATHY)
+        alt_df = alt_df.drop_duplicates(subset=["timestamp_ns"], keep="first")
+        
+        return alt_df
+
+    # ── Bag parsing ───────────────────────────────────────────────────────────────
+    def _parse_single_bag(self, mcap_path: Path) -> tuple[list[dict], list[dict], list[dict]]:
         """
         Parse one .mcap file.
 
@@ -106,6 +202,7 @@ class TurbidityProcessor:
         -------
         turb_rows : list of {timestamp_ns, datetime_utc, turbidity_ntu}
         stat_rows : list of {timestamp_ns, latitude, longitude, depth_m}
+        alt_rows  : list of {timestamp_ns, altitude_m}
         """
         try:
             from mcap.reader import make_reader
@@ -117,12 +214,13 @@ class TurbidityProcessor:
 
         turb_rows: list[dict] = []
         stat_rows: list[dict] = []
+        alt_rows: list[dict] = []
 
         try:
             with open(mcap_path, "rb") as f:
                 reader = make_reader(f)
                 for schema, channel, message in reader.iter_messages(
-                    topics=[TURB_TOPIC, STAT_TOPIC]
+                    topics=[TURB_TOPIC, STAT_TOPIC, BATHY_TOPIC]
                 ):
                     raw = message.data
                     ts  = message.log_time  # nanoseconds
@@ -155,45 +253,59 @@ class TurbidityProcessor:
                                     "depth_m":      abs_depth,
                                 })
 
+                    elif channel.topic == BATHY_TOPIC:
+                        altitude = _read_float64(raw, BATHY_ALT_OFF)
+                        if altitude is not None and 0.0 <= altitude <= 10000.0:
+                            alt_rows.append({
+                                "timestamp_ns": ts,
+                                "altitude_m":   altitude,
+                            })
+
         except Exception as e:
             self.log(f"  [ERROR] Failed to read {mcap_path.name}: {e}")
 
-        return turb_rows, stat_rows
+        return turb_rows, stat_rows, alt_rows
 
-    def _parse_all_bags(self, mcap_files: list[Path]) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Parse all bags; return (turb_df, stat_df)."""
+    def _parse_all_bags(self, mcap_files: list[Path]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Parse all bags; return (turb_df, stat_df, alt_df)."""
         all_turb: list[dict] = []
         all_stat: list[dict] = []
+        all_alt: list[dict] = []
 
         for path in mcap_files:
             self.log(f"  Parsing: {path.name}")
-            t_rows, s_rows = self._parse_single_bag(path)
-            self.log(f"    → {len(t_rows):,} turbidity, {len(s_rows):,} nav/status messages")
+            t_rows, s_rows, a_rows = self._parse_single_bag(path)
+            self.log(f"    → {len(t_rows):,} turbidity, {len(s_rows):,} nav/status, {len(a_rows):,} altitude messages")
             all_turb.extend(t_rows)
             all_stat.extend(s_rows)
+            all_alt.extend(a_rows)
 
         if not all_turb:
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         turb_df = pd.DataFrame(all_turb).sort_values("timestamp_ns").reset_index(drop=True)
         stat_df = pd.DataFrame(all_stat).sort_values("timestamp_ns").reset_index(drop=True) if all_stat else pd.DataFrame()
+        alt_df = pd.DataFrame(all_alt).sort_values("timestamp_ns").reset_index(drop=True) if all_alt else pd.DataFrame()
 
-        return turb_df, stat_df
+        return turb_df, stat_df, alt_df
 
-    def _parse_single_turbidity_text(self, txt_path: Path) -> tuple[list[dict], list[dict]]:
+    def _parse_single_turbidity_text(self, txt_path: Path) -> tuple[list[dict], list[dict], list[dict]]:
         """
         Parse one exported TURBIDITY.txt file.
 
         Expected columns include at least:
             mission_msecs, latitude, longitude, depth, data1
+        Optional: altitude (if present)
 
         Returns
         -------
         turb_rows : list of {timestamp_ns, datetime_utc, turbidity_ntu}
         stat_rows : list of {timestamp_ns, latitude, longitude, depth_m}
+        alt_rows  : list of {timestamp_ns, altitude_m}
         """
         turb_rows: list[dict] = []
         stat_rows: list[dict] = []
+        alt_rows: list[dict] = []
 
         try:
             with open(txt_path, "r", newline="", encoding="utf-8", errors="replace") as f:
@@ -205,7 +317,10 @@ class TurbidityProcessor:
                         f"  [WARN] {txt_path.name} missing required columns: "
                         f"{sorted(required_cols - header_cols)}"
                     )
-                    return turb_rows, stat_rows
+                    return turb_rows, stat_rows, alt_rows
+                
+                # Check if altitude is present
+                has_altitude = "altitude" in header_cols
 
                 bad_rows = 0
                 for row in reader:
@@ -234,6 +349,19 @@ class TurbidityProcessor:
                             "longitude": lon,
                             "depth_m": abs(depth),
                         })
+                        
+                        # Parse altitude if present
+                        if has_altitude:
+                            try:
+                                altitude = float(row["altitude"])
+                                if 0.0 <= altitude <= 10000.0:
+                                    alt_rows.append({
+                                        "timestamp_ns": ts,
+                                        "altitude_m": altitude,
+                                    })
+                            except (ValueError, KeyError):
+                                pass
+                                
                     except (TypeError, ValueError, KeyError):
                         bad_rows += 1
 
@@ -243,79 +371,143 @@ class TurbidityProcessor:
         except Exception as e:
             self.log(f"  [ERROR] Failed to read {txt_path.name}: {e}")
 
-        return turb_rows, stat_rows
+        return turb_rows, stat_rows, alt_rows
 
     def _parse_all_turbidity_text_files(
         self, txt_files: list[Path]
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Parse all TURBIDITY.txt files; return (turb_df, stat_df)."""
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Parse all TURBIDITY.txt files; return (turb_df, stat_df, alt_df)."""
         all_turb: list[dict] = []
         all_stat: list[dict] = []
+        all_alt: list[dict] = []
 
         for path in txt_files:
             self.log(f"  Parsing: {path.name}")
-            t_rows, s_rows = self._parse_single_turbidity_text(path)
-            self.log(f"    → {len(t_rows):,} turbidity, {len(s_rows):,} nav/status rows")
+            t_rows, s_rows, a_rows = self._parse_single_turbidity_text(path)
+            self.log(f"    → {len(t_rows):,} turbidity, {len(s_rows):,} nav/status, {len(a_rows):,} altitude rows")
             all_turb.extend(t_rows)
             all_stat.extend(s_rows)
+            all_alt.extend(a_rows)
 
         if not all_turb:
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         turb_df = pd.DataFrame(all_turb).sort_values("timestamp_ns").reset_index(drop=True)
         stat_df = pd.DataFrame(all_stat).sort_values("timestamp_ns").reset_index(drop=True) if all_stat else pd.DataFrame()
-        return turb_df, stat_df
+        alt_df = pd.DataFrame(all_alt).sort_values("timestamp_ns").reset_index(drop=True) if all_alt else pd.DataFrame()
+        return turb_df, stat_df, alt_df
 
-    def load_turbidity_and_status(self, nav_directory: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Load turbidity and nav/status rows, preferring TURBIDITY.txt over MCAP."""
+    def load_turbidity_and_status(self, nav_directory: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Load turbidity, nav/status, and altitude rows from available sources.
+        
+        Returns
+        -------
+        turb_df : DataFrame with turbidity data
+        stat_df : DataFrame with lat/lon/depth data
+        alt_df  : DataFrame with altitude data
+        """
         txt_files = self.find_turbidity_text_files(nav_directory)
 
         # Prefer text exports first. They are faster to parse and are often the
         # primary source for dives where bags are absent.
         if txt_files:
-            txt_turb_df, txt_stat_df = self._parse_all_turbidity_text_files(txt_files)
+            txt_turb_df, txt_stat_df, txt_alt_df = self._parse_all_turbidity_text_files(txt_files)
             if not txt_turb_df.empty:
                 self.log(
                     f"  Loaded {len(txt_turb_df):,} total turbidity rows from "
-                    f"{len(txt_files)} text file(s); skipping MCAP parse"
+                    f"{len(txt_files)} text file(s)"
                 )
-                return txt_turb_df, txt_stat_df
+                
+                # If TURBIDITY.txt didn't have altitude, load from separate sources
+                if txt_alt_df.empty:
+                    self.log("  TURBIDITY.txt lacks altitude data - searching for ADCP/BATHY files")
+                    alt_files = self.find_altitude_source_files(nav_directory)
+                    if alt_files:
+                        txt_alt_df = self._parse_all_altitude_source_files(alt_files)
+                        if not txt_alt_df.empty:
+                            self.log(f"  Loaded {len(txt_alt_df):,} altitude rows from separate nav files")
+                    else:
+                        self.log("  No ADCP/BATHY files found for altitude data")
+                
+                return txt_turb_df, txt_stat_df, txt_alt_df
 
             self.log("  TURBIDITY.txt file(s) found but no valid rows parsed; falling back to MCAP")
 
         mcap_files = self.find_mcap_files(nav_directory)
-        bag_turb_df, bag_stat_df = self._parse_all_bags(mcap_files) if mcap_files else (pd.DataFrame(), pd.DataFrame())
+        if mcap_files:
+            bag_turb_df, bag_stat_df, bag_alt_df = self._parse_all_bags(mcap_files)
+        else:
+            bag_turb_df, bag_stat_df, bag_alt_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         if not bag_turb_df.empty:
             self.log(
                 f"  Loaded {len(bag_turb_df):,} total turbidity rows "
                 f"from {len(mcap_files)} MCAP file(s)"
             )
+            
+            # If bags didn't have altitude, try to load from separate files
+            if bag_alt_df.empty:
+                self.log("  MCAP bags lack altitude data - searching for ADCP/BATHY files")
+                alt_files = self.find_altitude_source_files(nav_directory)
+                if alt_files:
+                    bag_alt_df = self._parse_all_altitude_source_files(alt_files)
+                    if not bag_alt_df.empty:
+                        self.log(f"  Loaded {len(bag_alt_df):,} altitude rows from separate nav files")
 
-        return bag_turb_df, bag_stat_df
+        return bag_turb_df, bag_stat_df, bag_alt_df
 
     # ── Time merge ────────────────────────────────────────────────────────────
 
     def _merge_with_nav(
-        self, turb_df: pd.DataFrame, stat_df: pd.DataFrame
+        self, turb_df: pd.DataFrame, stat_df: pd.DataFrame, alt_df: pd.DataFrame
     ) -> pd.DataFrame:
-        """Merge turbidity with nav data by nearest timestamp (10-second tolerance)."""
+        """
+        Merge turbidity with nav data and altitude by nearest timestamp (10-second tolerance).
+        
+        Parameters
+        ----------
+        turb_df : DataFrame with turbidity data
+        stat_df : DataFrame with lat/lon/depth data
+        alt_df  : DataFrame with altitude data
+        
+        Returns
+        -------
+        merged_df : DataFrame with all columns merged by timestamp
+        """
+        # First merge with nav/status data
         if stat_df.empty:
             self.log("  ⚠ No nav/status data found – lat/lon/depth columns will be NaN")
             turb_df["latitude"]  = float("nan")
             turb_df["longitude"] = float("nan")
             turb_df["depth_m"]   = float("nan")
-            return turb_df
-
-        merged = pd.merge_asof(
-            turb_df.copy(),
-            stat_df[["timestamp_ns", "latitude", "longitude", "depth_m"]].copy(),
-            on="timestamp_ns",
-            direction="nearest",
-            tolerance=10_000_000_000,   # 10 seconds in nanoseconds
-        )
-        matched = merged["latitude"].notna().sum()
-        self.log(f"  Time-matched {matched:,}/{len(merged):,} turbidity rows with nav data")
+            merged = turb_df.copy()
+        else:
+            merged = pd.merge_asof(
+                turb_df.copy(),
+                stat_df[["timestamp_ns", "latitude", "longitude", "depth_m"]].copy(),
+                on="timestamp_ns",
+                direction="nearest",
+                tolerance=10_000_000_000,   # 10 seconds in nanoseconds
+            )
+            matched = merged["latitude"].notna().sum()
+            self.log(f"  Time-matched {matched:,}/{len(merged):,} turbidity rows with nav data")
+        
+        # Then merge with altitude data
+        if alt_df.empty:
+            self.log("  ⚠ No altitude data found – altitude column will be NaN")
+            merged["altitude_m"] = float("nan")
+        else:
+            merged = pd.merge_asof(
+                merged,
+                alt_df[["timestamp_ns", "altitude_m"]].copy(),
+                on="timestamp_ns",
+                direction="nearest",
+                tolerance=10_000_000_000,   # 10 seconds in nanoseconds
+            )
+            matched_alt = merged["altitude_m"].notna().sum()
+            self.log(f"  Time-matched {matched_alt:,}/{len(merged):,} turbidity rows with altitude data")
+        
         return merged
 
     # ── CSV export ────────────────────────────────────────────────────────────
@@ -329,7 +521,7 @@ class TurbidityProcessor:
         out_path = os.path.join(output_dir, fname)
 
         columns = ["timestamp_ns", "datetime_utc", "turbidity_ntu",
-                   "latitude", "longitude", "depth_m"]
+                   "latitude", "longitude", "depth_m", "altitude_m"]
         # Only include columns that exist
         export_cols = [c for c in columns if c in df.columns]
         df[export_cols].to_csv(out_path, index=False)
@@ -705,7 +897,7 @@ class TurbidityProcessor:
         self.log(f"Scanning for turbidity sources in: {nav_directory}")
 
         # 1. Load supported turbidity sources
-        turb_df, stat_df = self.load_turbidity_and_status(nav_directory)
+        turb_df, stat_df, alt_df = self.load_turbidity_and_status(nav_directory)
 
         if turb_df.empty:
             self.log("  ✗ No turbidity data found in MCAP or TURBIDITY.txt sources – skipping")
@@ -713,8 +905,8 @@ class TurbidityProcessor:
 
         self.log(f"  Total turbidity messages: {len(turb_df):,}")
 
-        # 2. Merge with nav
-        merged_df = self._merge_with_nav(turb_df, stat_df)
+        # 2. Merge with nav and altitude
+        merged_df = self._merge_with_nav(turb_df, stat_df, alt_df)
 
         # 3. Export CSV
         self.export_csv(merged_df, output_dir, file_prefix)
