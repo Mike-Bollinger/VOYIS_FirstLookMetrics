@@ -130,7 +130,16 @@ class AltitudeMap:
             except Exception as e:
                 print(f"Warning: Failed to export GIS formats: {e}")
             
+            # Update master CSV with altitude categories
+            try:
+                csv_path = os.path.join(output_path, f"{file_prefix}Metrics.csv")
+                self.update_master_csv_with_altitude_metrics(csv_path, export_data)
+            except Exception as e:
+                print(f"Warning: Failed to update master CSV with altitude metrics: {e}")
+            
             # Create visualization
+            if filename is None:
+                filename = f"{file_prefix}Locations_Map.png"
             return self._create_location_plot(plot_data, output_path, filename, metrics)
             
         except Exception as e:
@@ -141,144 +150,102 @@ class AltitudeMap:
 
     def _create_location_plot(self, plot_data: List[Dict], output_path: str, 
                          filename: str, metrics=None) -> Optional[str]:
-        """Create the actual plot using cleaned data"""
-        # ... existing plotting code moved here ...
+        """Create the actual plot using cleaned data (already validated and outlier-filtered)"""
         if not plot_data:
             print("No GPS data available")
             return None
         
         try:
-            # Validate data points first
-            valid_data = []
-            invalid_data = []
+            # Data is already validated and outlier-filtered by create_location_map
+            # Just proceed with plotting
             
-            for i, point in enumerate(plot_data):
-                required_fields = ['latitude', 'longitude', 'altitude']
-                missing_fields = [field for field in required_fields if field not in point]
-                
-                if missing_fields:
-                    invalid_data.append({
-                        'index': i,
-                        'missing_fields': missing_fields,
-                        'filename': point.get('filename', 'unknown')
-                    })
-                else:
-                    valid_data.append(point)
+            # Set up matplotlib for non-interactive use
+            import matplotlib
+            matplotlib.use('Agg')
             
-            if invalid_data:
-                print("\nWarning: Found invalid GPS data points:")
-                for item in invalid_data[:5]:
-                    print(f"Index {item['index']}: Missing {', '.join(item['missing_fields'])} for file: {item['filename']}")
-                if len(invalid_data) > 5:
-                    print(f"...and {len(invalid_data) - 5} more invalid points")
+            # Create figure and axis
+            fig, ax = plt.subplots(figsize=(10, 8))
             
-            if not valid_data:
-                print("No valid GPS points found after filtering invalid data")
-                return None
-                
-            print(f"\nProcessing {len(valid_data)} valid GPS points ({len(invalid_data)} points excluded)")
+            # Extract coordinates and altitudes
+            lats = [p['latitude'] for p in plot_data]
+            lons = [p['longitude'] for p in plot_data]
+            alts = [p['altitude'] for p in plot_data]
             
-            # Create non-outlier subset for plotting
-            outliers = self._detect_outliers(valid_data)
-            plot_data = [point for point, is_outlier in zip(valid_data, outliers) if not is_outlier]
+            # Use class variable for low altitude threshold
+            low_altitude_threshold = self.low_altitude_threshold
             
-            print(f"\nExcluding {sum(outliers)} outlier points from plots (but keeping them in export files)")
+            # Separate points into three altitude categories
+            optimal_mask = [(a >= low_altitude_threshold) and (a < self.altitude_threshold) for a in alts]
+            too_high_mask = [a >= self.altitude_threshold for a in alts]
+            too_low_mask = [a < low_altitude_threshold for a in alts]
             
-            # Use plot_data for visualization but keep original data for exports
-            # Rest of the existing function code, but use plot_data instead of gps_data for plotting
-            try:
-                # Set up matplotlib for non-interactive use
-                import matplotlib
-                matplotlib.use('Agg')
-                
-                # Create figure and axis
-                fig, ax = plt.subplots(figsize=(10, 8))
-                
-                # Extract coordinates and altitudes
-                lats = [p['latitude'] for p in plot_data]
-                lons = [p['longitude'] for p in plot_data]
-                alts = [p['altitude'] for p in plot_data]
-                
-                # Use class variable for low altitude threshold
-                low_altitude_threshold = self.low_altitude_threshold
-                
-                # Separate points into three altitude categories
-                optimal_mask = [(a >= low_altitude_threshold) and (a < self.altitude_threshold) for a in alts]
-                too_high_mask = [a >= self.altitude_threshold for a in alts]
-                too_low_mask = [a < low_altitude_threshold for a in alts]
-                
-                # Count points in each category
-                optimal_count = sum(optimal_mask)
-                too_high_count = sum(too_high_mask)
-                too_low_count = sum(too_low_mask)
-                total_count = len(alts)
-                
-                # Create scatter plots with different colors for each category
-                sc1 = ax.scatter([lons[i] for i in range(len(lons)) if optimal_mask[i]],
-                               [lats[i] for i in range(len(lats)) if optimal_mask[i]],
-                               c='green', label=f'Optimal altitude ({low_altitude_threshold}-{self.altitude_threshold}m): {optimal_count} images', 
-                               alpha=0.6, s=50)
-                               
-                sc2 = ax.scatter([lons[i] for i in range(len(lons)) if too_high_mask[i]],
-                               [lats[i] for i in range(len(lats)) if too_high_mask[i]],
-                               c='red', label=f'Too high (>{self.altitude_threshold}m): {too_high_count} images', 
-                               alpha=0.6, s=50)
-                               
-                sc3 = ax.scatter([lons[i] for i in range(len(lons)) if too_low_mask[i]],
-                               [lats[i] for i in range(len(lats)) if too_low_mask[i]],
-                               c='orange', label=f'Too low (<{low_altitude_threshold}m): {too_low_count} images', 
-                               alpha=0.6, s=50)
-                
-                # Calculate percentages
-                optimal_pct = (optimal_count / total_count) * 100
-                too_high_pct = (too_high_count / total_count) * 100
-                too_low_pct = (too_low_count / total_count) * 100
-                
-                # Add labels and title
-                ax.set_xlabel('Longitude', fontsize=12)
-                ax.set_ylabel('Latitude', fontsize=12)
-                ax.set_title('Image Locations by Altitude', fontsize=14)
-                
-                # Add grid
-                ax.grid(True, linestyle='--', alpha=0.7)
-                
-                # Add legend
-                legend = ax.legend(loc='upper right', fontsize=10)
-                
-                # Add statistics annotation
-                stats_text = f'Total Images: {total_count}\n'
-                stats_text += f'Optimal ({low_altitude_threshold}-{self.altitude_threshold}m): {optimal_count} ({optimal_pct:.1f}%)\n'
-                stats_text += f'Too high (>{self.altitude_threshold}m): {too_high_count} ({too_high_pct:.1f}%)\n'
-                stats_text += f'Too low (<{low_altitude_threshold}m): {too_low_count} ({too_low_pct:.1f}%)'
-                
-                # Add stats box
-                ax.text(0.02, 0.02, stats_text, transform=ax.transAxes, 
-                      verticalalignment='bottom', horizontalalignment='left',
-                      bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-                
-                # Add scale bar if metrics object with scale info is available
-                if metrics and hasattr(metrics, 'scale_info') and metrics.scale_info:
-                    self._add_scale_bar(ax, metrics.scale_info)
-                
-                plt.tight_layout()
-                
-                # Save plot with standardized naming
-                if filename is None:
-                    filename = f"{file_prefix}Locations_Map.png"
-                output_file = os.path.join(output_path, filename)
-                plt.savefig(output_file, dpi=300, bbox_inches='tight')
-                plt.close(fig)  # Close the figure to free memory
-                
-                print(f"Location map saved to: {output_file}")
-                return output_file
-                
-            except Exception as e:
-                print(f"Error creating location map: {e}")
-                import traceback
-                print(traceback.format_exc())
-                return None
+            # Count points in each category
+            optimal_count = sum(optimal_mask)
+            too_high_count = sum(too_high_mask)
+            too_low_count = sum(too_low_mask)
+            total_count = len(alts)
+            
+            # Create scatter plots with different colors for each category
+            sc1 = ax.scatter([lons[i] for i in range(len(lons)) if optimal_mask[i]],
+                           [lats[i] for i in range(len(lats)) if optimal_mask[i]],
+                           c='green', label=f'Optimal altitude ({low_altitude_threshold}-{self.altitude_threshold}m): {optimal_count} images', 
+                           alpha=0.6, s=50)
+                           
+            sc2 = ax.scatter([lons[i] for i in range(len(lons)) if too_high_mask[i]],
+                           [lats[i] for i in range(len(lats)) if too_high_mask[i]],
+                           c='red', label=f'Too high (>{self.altitude_threshold}m): {too_high_count} images', 
+                           alpha=0.6, s=50)
+                           
+            sc3 = ax.scatter([lons[i] for i in range(len(lons)) if too_low_mask[i]],
+                           [lats[i] for i in range(len(lats)) if too_low_mask[i]],
+                           c='orange', label=f'Too low (<{low_altitude_threshold}m): {too_low_count} images', 
+                           alpha=0.6, s=50)
+            
+            # Calculate percentages
+            optimal_pct = (optimal_count / total_count) * 100 if total_count > 0 else 0
+            too_high_pct = (too_high_count / total_count) * 100 if total_count > 0 else 0
+            too_low_pct = (too_low_count / total_count) * 100 if total_count > 0 else 0
+            
+            # Add labels and title
+            ax.set_xlabel('Longitude', fontsize=12)
+            ax.set_ylabel('Latitude', fontsize=12)
+            ax.set_title('Image Locations by Altitude', fontsize=14)
+            
+            # Add grid
+            ax.grid(True, linestyle='--', alpha=0.7)
+            
+            # Add legend
+            legend = ax.legend(loc='upper right', fontsize=10)
+            
+            # Add statistics annotation
+            stats_text = f'Total Images: {total_count}\n'
+            stats_text += f'Optimal ({low_altitude_threshold}-{self.altitude_threshold}m): {optimal_count} ({optimal_pct:.1f}%)\n'
+            stats_text += f'Too high (>{self.altitude_threshold}m): {too_high_count} ({too_high_pct:.1f}%)\n'
+            stats_text += f'Too low (<{low_altitude_threshold}m): {too_low_count} ({too_low_pct:.1f}%)'
+            
+            # Add stats box
+            ax.text(0.02, 0.02, stats_text, transform=ax.transAxes, 
+                  verticalalignment='bottom', horizontalalignment='left',
+                  bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            # Add scale bar if metrics object with scale info is available
+            if metrics and hasattr(metrics, 'scale_info') and metrics.scale_info:
+                self._add_scale_bar(ax, metrics.scale_info)
+            
+            plt.tight_layout()
+            
+            # Save plot
+            output_file = os.path.join(output_path, filename)
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close(fig)  # Close the figure to free memory
+            
+            print(f"Location map saved to: {output_file}")
+            return output_file
+            
         except Exception as e:
-            print(f"Error processing GPS data: {e}")
+            print(f"Error creating location map: {e}")
+            import traceback
+            print(traceback.format_exc())
             return None
     
     def create_altitude_histogram(self, gps_data: List[Dict], output_path: str, 
@@ -530,6 +497,76 @@ class AltitudeMap:
         except Exception as e:
             print(f"Error in GIS export: {str(e)}")
             return result_files
+
+    def update_master_csv_with_altitude_metrics(self, csv_path: str, gps_data: List[Dict]) -> bool:
+        """
+        Update the master Image_Metrics CSV with altitude-specific fields
+        
+        Args:
+            csv_path: Path to the master CSV file
+            gps_data: List of GPS data dictionaries with altitude information
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not os.path.exists(csv_path):
+                print(f"CSV file not found: {csv_path}")
+                return False
+            
+            print(f"Updating {csv_path} with altitude metrics...")
+            
+            # Load the CSV
+            df = pd.read_csv(csv_path)
+            
+            # Add altitude_category column if it doesn't exist
+            if 'altitude_category' not in df.columns:
+                df['altitude_category'] = ''
+            
+            # Create a mapping from filename to altitude category
+            altitude_categories = {}
+            for point in gps_data:
+                if 'altitude' in point and 'filename' in point:
+                    alt = point['altitude']
+                    filename = point['filename']
+                    
+                    # Categorize based on thresholds
+                    if alt < self.low_altitude_threshold:
+                        category = 'too_low'
+                    elif alt < self.altitude_threshold:
+                        category = 'optimal'
+                    else:
+                        category = 'too_high'
+                    
+                    altitude_categories[filename] = category
+            
+            # Update the dataframe
+            updated_count = 0
+            for idx, row in df.iterrows():
+                filename = row['filename']
+                if filename in altitude_categories:
+                    df.at[idx, 'altitude_category'] = altitude_categories[filename]
+                    updated_count += 1
+            
+            # Save back to CSV
+            df.to_csv(csv_path, index=False)
+            print(f"✓ Updated {updated_count} rows with altitude categories")
+            
+            # Print summary statistics
+            category_counts = df['altitude_category'].value_counts()
+            print("\nAltitude Category Summary:")
+            for category, count in category_counts.items():
+                if category:  # Skip empty strings
+                    pct = (count / len(df)) * 100
+                    print(f"  {category}: {count} images ({pct:.1f}%)")
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error updating master CSV with altitude metrics: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return False
 
     def extract_exif_data(self, image_path: str) -> Dict:
         """Extract EXIF data and image dimensions from an image file"""

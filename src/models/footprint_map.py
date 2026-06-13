@@ -999,25 +999,25 @@ class FootprintMap:
         # Create vertical overlap map
         if len(footprints) >= 2:
             print("\nCreating vertical overlap map...")
-            self.create_vertical_overlap_map(footprints, output_path)
+            self.create_vertical_overlap_map(footprints, output_path, file_prefix)
             print("Vertical overlap map created")
         
         # Create horizontal overlap map
         if len(footprints) >= 21:  # Need at least min_separation+1 images
             print("\nCreating horizontal overlap map...")
-            self.create_horizontal_overlap_map(footprints, output_path)
+            self.create_horizontal_overlap_map(footprints, output_path, file_prefix)
             print("Horizontal overlap map created")
         
         # Create overall overlap map
         if len(footprints) >= 2:
             print("\nCreating overall overlap map...")
-            self.create_overall_overlap_map(footprints, output_path)
+            self.create_overall_overlap_map(footprints, output_path, file_prefix)
             print("Overall overlap map created")
         
         # Identify meaningful subsets and create all zoomed maps in one place
         subsets = self.identify_subsets(footprints)
         if subsets:
-            self.create_zoomed_maps(footprints, subsets, output_path)
+            self.create_zoomed_maps(footprints, subsets, output_path, file_prefix)
         
 
         
@@ -2619,7 +2619,6 @@ class FootprintMap:
             
             # Cluster dense footprints into contiguous areas using spatial clustering
             from sklearn.cluster import DBSCAN
-            import numpy as np
             
             # Prepare coordinates for clustering
             coords = np.array([[fd['latitude'], fd['longitude']] for fd in dense_footprints])
@@ -2825,7 +2824,7 @@ class FootprintMap:
             print(f"Error in simple photogrammetric detection: {e}")
             return []
 
-    def create_zoomed_maps(self, footprints: List[Dict], subsets: List[Dict], output_path: str, file_prefix: str = "Image_"):
+    def create_zoomed_maps(self, footprints: List[Dict], subsets: List[Dict], output_path: str, file_prefix: str = "Image_") -> None:
         """
         Create zoomed maps for identified subsets
         
@@ -3218,6 +3217,7 @@ class FootprintMap:
                 gps_data=gps_data,
                 output_path=output_folder,
                 nav_file_path=None,  # CSV already contains heading data
+                file_prefix=file_prefix,
                 filename=filename
             )
             

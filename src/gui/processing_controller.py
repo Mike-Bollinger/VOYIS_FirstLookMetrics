@@ -471,6 +471,7 @@ class ProcessingController:
                     # STEP 2: Process each stage
                     self.log_message("STEP 2: Processing individual analysis stages...")
                     completed_stages = 0
+                    failed_stages = 0
                     total_stages = len(processing_stages)
                     
                     for stage_idx, (stage_name, stage_func) in enumerate(processing_stages):
@@ -489,13 +490,19 @@ class ProcessingController:
                             
                             self.log_message(f"STAGE {stage_idx + 1}/{total_stages}: {stage_name}")
                             
-                            # Execute the stage
-                            stage_func(input_folder, output_folder)
-                            completed_stages += 1
-                            
-                            self.log_message(f"✓ {stage_name} completed")
+                            # Execute the stage and track explicit success/failure.
+                            stage_result = stage_func(input_folder, output_folder)
+                            stage_success = True if stage_result is None else bool(stage_result)
+
+                            if stage_success:
+                                completed_stages += 1
+                                self.log_message(f"✓ {stage_name} completed")
+                            else:
+                                failed_stages += 1
+                                self.log_message(f"✗ {stage_name} failed")
                             
                         except Exception as stage_error:
+                            failed_stages += 1
                             self.log_message(f"✗ Error in {stage_name}: {stage_error}")
                             self.log_message(f"Traceback: {traceback.format_exc()}")
                             self.log_message(f"Continuing with next stage...")
@@ -506,13 +513,13 @@ class ProcessingController:
                     self.log_message(f"{'='*60}")
                     self.log_message(f"Total stages: {total_stages}")
                     self.log_message(f"Completed successfully: {completed_stages}")
-                    self.log_message(f"Failed: {total_stages - completed_stages}")
+                    self.log_message(f"Failed: {failed_stages}")
                     self.log_message(f"Success rate: {(completed_stages/total_stages*100):.1f}%")
                     
-                    if completed_stages == total_stages:
+                    if failed_stages == 0:
                         self.log_message("✓ All imagery processing completed successfully!")
                     else:
-                        self.log_message(f"⚠ Imagery processing completed with {total_stages - completed_stages} errors")
+                        self.log_message(f"⚠ Imagery processing completed with {failed_stages} errors")
             
             # Final check before completion
             if self.check_stop_flag():
@@ -843,7 +850,7 @@ class ProcessingController:
             
             if not hasattr(self, 'metrics') or not self.metrics:
                 self.log_message("  └─ ✗ Error: Metrics processor not initialized")
-                return
+                return False
             
             try:
                 # OPTIMIZATION: Skip GPS extraction if we already have it from CSV creation
@@ -878,12 +885,15 @@ class ProcessingController:
                 
                 self.log_message(f"  └─ ✓ Basic metrics analysis completed - {processed_files} files processed")
                 self.log_message(f"       Results saved to: {metrics_file}")
+                return True
                 
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in basic metrics: {e}")
+                return False
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in basic metrics: {e}")
+            return False
 
     def process_location_map(self, input_folder, output_folder):
         """Process location map generation"""
@@ -892,11 +902,11 @@ class ProcessingController:
             
             if not hasattr(self, 'altitude_map') or not self.altitude_map:
                 self.log_message("  └─ ✗ Error: AltitudeMap processor not initialized")
-                return
+                return False
                 
             if not hasattr(self, 'metrics') or not self.metrics or not self.metrics.gps_data:
                 self.log_message("  └─ ✗ Error: No GPS data available for location map")
-                return
+                return False
             
             try:
                 # Use dive prefix if available
@@ -912,14 +922,18 @@ class ProcessingController:
                 
                 if map_file and os.path.exists(map_file):
                     self.log_message(f"  └─ ✓ Location map created: {os.path.basename(map_file)}")
+                    return True
                 else:
                     self.log_message("  └─ ✗ Location map generation failed")
+                    return False
                     
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in location map: {e}")
+                return False
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in location map: {e}")
+            return False
 
     def process_histogram(self, input_folder, output_folder):
         """Process altitude histogram"""
@@ -928,11 +942,11 @@ class ProcessingController:
             
             if not hasattr(self, 'altitude_map') or not self.altitude_map:
                 self.log_message("  └─ ✗ Error: AltitudeMap processor not initialized")
-                return
+                return False
                 
             if not hasattr(self, 'metrics') or not self.metrics or not self.metrics.gps_data:
                 self.log_message("  └─ ✗ Error: No GPS data available for histogram")
-                return
+                return False
             
             try:
                 # Use dive prefix if available
@@ -947,27 +961,29 @@ class ProcessingController:
                 
                 if histogram_file and os.path.exists(histogram_file):
                     self.log_message(f"  └─ ✓ Altitude histogram created: {os.path.basename(histogram_file)}")
+                    return True
                 else:
                     self.log_message("  └─ ✗ Altitude histogram creation failed")
+                    return False
                     
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in histogram: {e}")
+                return False
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in histogram: {e}")
+            return False
 
     def process_turbidity_merge(self, input_folder, output_folder):
-        """Merge turbidity NTU values from nav turbidity sources into the Image_Metrics CSV.
-
-        Searches the navigation directory recursively for supported turbidity sources
-        (.mcap and TURBIDITY.txt), extracts turbidity readings, then joins them to
-        image rows in the Image_Metrics CSV by nearest timestamp (±10-second
-        tolerance). Adds a 'turbidity_ntu' column in-place.
+        """Merge turbidity NTU from TURBIDITY.txt (or fallback to MCAP bags) into Image_Metrics CSV.
+        
+        Matches by nearest time (±10s tolerance) using existing depth/heading/altitude from CSV.
         """
         self.log_message("  └─ Running turbidity data merge...")
 
-        import re
         import glob as _glob
+        import pandas as pd
+        from pathlib import Path
 
         # ── Locate Image_Metrics CSV ─────────────────────────────────────────
         dive_prefix = (
@@ -982,9 +998,9 @@ class ProcessingController:
                 csv_path = candidates[0]
             else:
                 self.log_message("  └─ ⚠ Image_Metrics CSV not found – turbidity merge skipped")
-                return
+                return False
 
-        # ── Locate navigation / bag directory ────────────────────────────────
+        # ── Locate navigation directory ──────────────────────────────────────
         nav_directory = (
             self.nav_directory_path.get()
             if hasattr(self, 'nav_directory_path')
@@ -992,122 +1008,161 @@ class ProcessingController:
         )
         if not nav_directory or not os.path.exists(nav_directory):
             self.log_message("  └─ ⚠ Navigation directory not set – turbidity merge skipped")
-            return
+            return False
 
         try:
-            import pandas as pd
-            from src.models.turbidity_processor import TurbidityProcessor
+            # ── Try to read TURBIDITY.txt first (simpler, preferred) ─────────
+            turb_files = list(Path(nav_directory).rglob("TURBIDITY.txt"))
+            turb_df = None
+            dive_date = None
+            
+            if turb_files:
+                self.log_message(f"  └─ Found {len(turb_files)} TURBIDITY.txt file(s)")
+                try:
+                    # Read TURBIDITY.txt – has mission_msecs, lat, lon, depth, data1 (turbidity)
+                    turb_df = pd.read_csv(turb_files[0], skipinitialspace=True)
+                    self.log_message(f"  └─ Loaded {len(turb_df)} turbidity rows from TURBIDITY.txt")
+                    
+                    # Expect columns: mission_msecs, latitude, longitude, depth, type, index, faults, data1, data2
+                    # data1 is turbidity in NTU
+                    if 'data1' not in turb_df.columns:
+                        turb_df = None
+                except Exception as e:
+                    self.log_message(f"  └─ ⚠ Failed to parse TURBIDITY.txt: {e}")
+                    turb_df = None
+            
+            # Fallback: try MCAP bags if TURBIDITY.txt unavailable or failed
+            if turb_df is None or turb_df.empty:
+                self.log_message("  └─ Falling back to MCAP bag parsing...")
+                from src.models.turbidity_processor import TurbidityProcessor
+                processor = TurbidityProcessor(log_callback=self.log_message)
+                load_result = processor.load_turbidity_and_status(nav_directory)
+                if isinstance(load_result, tuple) and len(load_result) >= 1:
+                    turb_df = load_result[0]
+                else:
+                    turb_df = pd.DataFrame()
+            
+            if turb_df is None or turb_df.empty:
+                self.log_message("  └─ ⚠ No turbidity data found from any source")
+                return False
 
-            # ── Parse turbidity from all supported nav sources ───────────────
-            processor = TurbidityProcessor(log_callback=self.log_message)
-            turb_df, _ = processor.load_turbidity_and_status(nav_directory)
-
-            if turb_df.empty:
-                self.log_message("  └─ ⚠ No turbidity data found in nav directory sources")
-                return
-
-            self.log_message(f"  └─ Parsed {len(turb_df):,} turbidity readings")
+            self.log_message(f"  └─ Loaded {len(turb_df):,} turbidity readings")
 
             # ── Load Image_Metrics CSV ────────────────────────────────────────
             img_df = pd.read_csv(csv_path)
-
             if img_df.empty or 'datetime_original' not in img_df.columns:
                 self.log_message("  └─ ⚠ Image_Metrics CSV missing datetime_original column")
-                return
+                return False
 
-            # ── Convert image EXIF timestamps to nanoseconds ──────────────────
-            def _exif_to_ns(dt_str):
-                """Parse EXIF 'YYYY:MM:DD HH:MM:SS' → UTC timestamp in nanoseconds."""
+            # ── Infer dive_date from image timestamps if needed ───────────────
+            if 'mission_msecs' in turb_df.columns and dive_date is None:
+                # Extract dive date from first valid image EXIF timestamp
+                for idx, row in img_df.iterrows():
+                    if pd.notna(row['datetime_original']):
+                        try:
+                            from dateutil import parser
+                            dt = parser.parse(str(row['datetime_original']).replace(':', '-', 2))
+                            dive_date = dt.date()
+                            break
+                        except Exception:
+                            continue
+                if dive_date is None:
+                    dive_date = pd.Timestamp.now().date()
+                self.log_message(f"  └─ Using dive date: {dive_date}")
+
+            # ── Convert timestamps for matching ──────────────────────────────
+            def _parse_exif_seconds(dt_str):
+                """Parse EXIF 'YYYY:MM:DD HH:MM:SS' → seconds since midnight UTC"""
                 if not dt_str or pd.isna(dt_str):
                     return None
-                s = str(dt_str)
-                # EXIF uses colons in date part: "2024:07:04 02:29:09"
-                m = re.match(
-                    r'(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})', s
-                )
-                if m:
-                    from datetime import datetime, timezone
-                    dt = datetime(
-                        int(m.group(1)), int(m.group(2)), int(m.group(3)),
-                        int(m.group(4)), int(m.group(5)), int(m.group(6)),
-                        tzinfo=timezone.utc
-                    )
-                    return int(dt.timestamp() * 1e9)
-                # Fallback: try dateutil
                 try:
                     from dateutil import parser
-                    from datetime import timezone
-                    dt = parser.parse(s)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return int(dt.timestamp() * 1e9)
+                    dt = parser.parse(str(dt_str).replace(':', '-', 2))
+                    # Return seconds since start of day
+                    return dt.hour * 3600 + dt.minute * 60 + dt.second
                 except Exception:
                     return None
 
-            img_df['_ts_ns'] = img_df['datetime_original'].apply(_exif_to_ns)
-            valid_ts = img_df['_ts_ns'].notna().sum()
-            self.log_message(f"  └─ {valid_ts}/{len(img_df)} images have parseable timestamps")
+            def _mission_msecs_to_seconds(msecs):
+                """Convert mission milliseconds to seconds"""
+                if pd.isna(msecs):
+                    return None
+                return float(msecs) / 1000.0
 
-            if valid_ts == 0:
-                self.log_message("  └─ ⚠ No parseable image timestamps – turbidity merge skipped")
-                img_df.drop(columns=['_ts_ns'], inplace=True, errors='ignore')
-                return
+            # Add time columns for matching
+            img_df['_img_seconds'] = pd.to_numeric(
+                img_df['datetime_original'].apply(_parse_exif_seconds), errors='coerce'
+            ).astype('float64')
+            if 'mission_msecs' in turb_df.columns:
+                turb_df['_turb_seconds'] = pd.to_numeric(
+                    turb_df['mission_msecs'].apply(_mission_msecs_to_seconds), errors='coerce'
+                ).astype('float64')
+            elif 'timestamp_ns' in turb_df.columns:
+                # Use nanosecond timestamps - convert to seconds
+                turb_df['_turb_seconds'] = pd.to_numeric(
+                    (turb_df['timestamp_ns'] / 1e9) % 86400, errors='coerce'
+                ).astype('float64')  # seconds into day
+            else:
+                turb_df['_turb_seconds'] = pd.Series(dtype='float64')
 
-            # ── Merge by nearest timestamp (±10 s) ───────────────────────────
-            # Keep the original DataFrame index as a column so we can map values back.
-            img_valid = (
-                img_df[img_df['_ts_ns'].notna()]
-                .copy()
-                .assign(_ts_ns=lambda d: d['_ts_ns'].astype('int64'))
-                .sort_values('_ts_ns')
-            )
-            # Preserve original index
-            img_valid_reset = img_valid.reset_index()   # 'index' col = original position
+            # Prepare for merge
+            img_valid = img_df[img_df['_img_seconds'].notna()].copy()
+            img_valid['_orig_index'] = img_valid.index
+            turb_valid = turb_df[turb_df['_turb_seconds'].notna()].copy().reset_index(drop=True)
 
-            turb_for_merge = (
-                turb_df[['timestamp_ns', 'turbidity_ntu']]
-                .copy()
-                .assign(timestamp_ns=lambda d: d['timestamp_ns'].astype('int64'))
-                .sort_values('timestamp_ns')
-                .reset_index(drop=True)
-            )
+            if img_valid.empty or turb_valid.empty:
+                self.log_message("  └─ ⚠ No valid timestamps for matching")
+                return False
+
+            # ── Merge by nearest time (±10s) + depth proximity ─────────────────
+            # Sort both by time for merge_asof
+            img_valid['_img_seconds'] = pd.to_numeric(img_valid['_img_seconds'], errors='coerce').astype('float64')
+            turb_valid['_turb_seconds'] = pd.to_numeric(turb_valid['_turb_seconds'], errors='coerce').astype('float64')
+            img_valid = img_valid.sort_values('_img_seconds').reset_index(drop=True)
+            turb_valid = turb_valid.sort_values('_turb_seconds').reset_index(drop=True)
+
+            # Select turbidity column (could be data1, turbidity_ntu, etc)
+            turb_col = 'data1' if 'data1' in turb_valid.columns else 'turbidity_ntu'
+            if turb_col not in turb_valid.columns:
+                self.log_message(f"  └─ ⚠ No turbidity column found (expected {turb_col})")
+                return False
 
             merged = pd.merge_asof(
-                img_valid_reset[['index', '_ts_ns']],
-                turb_for_merge,
-                left_on='_ts_ns',
-                right_on='timestamp_ns',
+                img_valid[['_img_seconds', 'depth']],
+                turb_valid[['_turb_seconds', turb_col, 'depth']].rename(
+                    columns={'depth': 'turb_depth', turb_col: 'turbidity_ntu'}
+                ),
+                left_on='_img_seconds',
+                right_on='_turb_seconds',
                 direction='nearest',
-                tolerance=10_000_000_000   # 10 seconds in nanoseconds
+                tolerance=10.0,  # ±10 seconds
+                suffixes=('_img', '_turb')
             )
 
             matched = merged['turbidity_ntu'].notna().sum()
-            self.log_message(
-                f"  └─ Matched turbidity to {matched}/{len(merged)} images "
-                f"(tolerance = 10 s)"
-            )
+            self.log_message(f"  └─ Matched {matched}/{len(img_valid)} images by time (±10s)")
 
-            # Map turbidity back to the full DataFrame using original indices
-            img_df['turbidity_ntu'] = float('nan')
-            valid_mask = merged['turbidity_ntu'].notna()
-            img_df.loc[
-                merged.loc[valid_mask, 'index'].values,
-                'turbidity_ntu'
-            ] = merged.loc[valid_mask, 'turbidity_ntu'].values
+            # ── Write turbidity back to original CSV ─────────────────────────
+            if 'turbidity_ntu' not in img_df.columns:
+                img_df['turbidity_ntu'] = float('nan')
 
-            # Drop working column and save
-            img_df.drop(columns=['_ts_ns'], inplace=True, errors='ignore')
+            img_df.loc[img_valid['_orig_index'].values, 'turbidity_ntu'] = merged['turbidity_ntu'].values
+            img_df.drop(columns=['_img_seconds'], inplace=True, errors='ignore')
             img_df.to_csv(csv_path, index=False)
+
             self.log_message(
-                f"  └─ ✓ Turbidity column added to {os.path.basename(csv_path)} "
-                f"({matched} rows populated)"
+                f"  └─ ✓ Turbidity merged: {matched} rows populated in {os.path.basename(csv_path)}"
             )
+            return True
 
         except ImportError as e:
             self.log_message(f"  └─ ✗ Missing dependency for turbidity merge: {e}")
+            return False
         except Exception as e:
             self.log_message(f"  └─ ✗ Turbidity merge error: {e}")
+            import traceback
             self.log_message(traceback.format_exc())
+            return False
 
     def process_footprint_map(self, input_folder, output_folder):
         """Process footprint map generation"""
@@ -1115,11 +1170,11 @@ class ProcessingController:
             self.log_message("  └─ Running footprint map generation...")
             if not hasattr(self, 'footprint_map') or not self.footprint_map:
                 self.log_message("  └─ ✗ Error: FootprintMap processor not initialized")
-                return
+                return False
                 
             if not hasattr(self, 'metrics') or not self.metrics or not self.metrics.gps_data:
                 self.log_message("  └─ ✗ Error: No GPS data available for footprint map")
-                return
+                return False
             
             try:
                 # Set altitude threshold
@@ -1163,14 +1218,18 @@ class ProcessingController:
                         self.metrics.horizontal_overlap_stats = self.footprint_map.horizontal_overlap_stats
                     if hasattr(self.footprint_map, 'overall_overlap_stats'):
                         self.metrics.overall_overlap_stats = self.footprint_map.overall_overlap_stats
+                    return True
                 else:
                     self.log_message("  └─ ✗ Footprint map generation failed")
+                    return False
                     
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in footprint map: {e}")
+                return False
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in footprint map: {e}")
+            return False
 
     def process_visibility_analysis(self, input_folder, output_folder):
         """Process visibility analysis"""
@@ -1179,12 +1238,12 @@ class ProcessingController:
             
             if not hasattr(self, 'visibility_analyzer') or not self.visibility_analyzer:
                 self.log_message("  └─ ✗ Error: VisibilityAnalyzer not initialized")
-                return
+                return False
             
             # Verify input folder exists and has images
             if not input_folder or not os.path.exists(input_folder):
                 self.log_message(f"  └─ ✗ Error: Input folder does not exist: {input_folder}")
-                return
+                return False
             
             # Count images in input folder
             image_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
@@ -1196,7 +1255,7 @@ class ProcessingController:
             
             if image_count == 0:
                 self.log_message(f"  └─ ✗ Error: No images found in input folder: {input_folder}")
-                return
+                return False
             
             self.log_message(f"       Found {image_count} images in input folder")
             
@@ -1218,7 +1277,7 @@ class ProcessingController:
                         self.log_message(f"       Using default model: {default_model}")
                     else:
                         self.log_message("  └─ ✗ No model path specified and default model not found")
-                        return
+                        return False
                 
                 self.log_message("       Loading visibility model...")
                 
@@ -1226,7 +1285,7 @@ class ProcessingController:
                 success = self.visibility_analyzer.load_or_train_model(model_path)
                 if not success:
                     self.log_message("  └─ ✗ Failed to load visibility model")
-                    return
+                    return False
                 
                 self.log_message("       ✓ Model loaded, analyzing images...")
                 
@@ -1236,7 +1295,7 @@ class ProcessingController:
                 master_csv = os.path.join(output_folder, csv_filename)
                 if not os.path.exists(master_csv):
                     self.log_message(f"  └─ ⚠ {csv_filename} not found, visibility analysis requires existing CSV")
-                    return
+                    return False
                 
                 # Use dive prefix if available
                 dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
@@ -1251,15 +1310,19 @@ class ProcessingController:
                 if success:
                     self.log_message("  └─ ✓ Visibility analysis completed successfully")
                     self.log_message("       Results updated in Image_Metrics.csv")
+                    return True
                 else:
                     self.log_message("  └─ ✗ Visibility analysis failed")
+                    return False
                     
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in visibility analysis: {e}")
                 self.log_message(f"       Traceback: {traceback.format_exc()}")
+                return False
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in visibility analysis: {e}")
+            return False
 
     def process_highlight_selection(self, input_folder, output_folder):
         """Process highlight image selection"""
@@ -1268,12 +1331,12 @@ class ProcessingController:
             
             if not hasattr(self, 'highlight_selector') or not self.highlight_selector:
                 self.log_message("  └─ ✗ Error: HighlightSelector not initialized")
-                return
+                return False
             
             # Verify input folder exists and has images
             if not input_folder or not os.path.exists(input_folder):
                 self.log_message(f"  └─ ✗ Error: Input folder does not exist: {input_folder}")
-                return
+                return False
             
             # Count images in input folder to verify we have something to work with
             image_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
@@ -1287,7 +1350,7 @@ class ProcessingController:
             
             if image_count == 0:
                 self.log_message(f"  └─ ✗ Error: No images found in input folder")
-                return
+                return False
             
             try:
                 # The highlight selector will automatically check for visibility results
@@ -1302,7 +1365,7 @@ class ProcessingController:
                 master_csv = os.path.join(output_folder, csv_filename)
                 if not os.path.exists(master_csv):
                     self.log_message(f"  └─ ⚠ {csv_filename} not found, highlight selection requires existing CSV")
-                    return
+                    return False
                 
                 # Use dive prefix if available
                 dive_prefix = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "image_"
@@ -1328,15 +1391,19 @@ class ProcessingController:
                         self.log_message(f"       Used visibility analysis + image metrics mode")
                     else:
                         self.log_message(f"       Used image metrics only mode")
+                    return True
                 else:
                     self.log_message("  └─ ✗ No highlight images were selected")
+                    return False
                     
             except Exception as e:
                 self.log_message(f"  └─ ✗ Error in highlight selection: {e}")
                 self.log_message(f"       Traceback: {traceback.format_exc()}")
+                return False
                 
         except Exception as e:
             self.log_message(f"  └─ ✗ Error in highlight selection: {e}")
+            return False
 
     def get_required_imagery_stages(self):
         """Get list of required imagery processing stages"""

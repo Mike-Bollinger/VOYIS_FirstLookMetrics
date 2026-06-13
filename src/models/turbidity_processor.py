@@ -808,7 +808,7 @@ class TurbidityProcessor:
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            fname = f"{file_prefix}Depth_vs_Time.png"
+            fname = f"{file_prefix}Turbidity_Depth_vs_Time.png"
             path = os.path.join(output_dir, fname)
             plt.savefig(path, facecolor="white", bbox_inches="tight", dpi=200)
             plt.close(fig)

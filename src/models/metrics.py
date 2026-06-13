@@ -47,6 +47,9 @@ class Metrics:
         self.viewls_processed_size = 0
         self.unknown_processed_count = 0
         self.unknown_processed_size = 0
+
+        # Reference date used when parsing mission-time-only nav files.
+        self.nav_reference_date = None
     
     def analyze_directory(self, input_folder: str, progress_callback: Callable = None, extract_gps: bool = False) -> Tuple[int, List[str]]:
         """
@@ -492,17 +495,58 @@ class Metrics:
             import numpy as np
             import pandas as pd
 
-            phins_file = None
-            adcp_file = None
+            phins_candidates = []
+            adcp_candidates = []
+
+            def _score_nav_candidate(path, kind):
+                """Score nav file candidates so we prefer exported runtime data over config/raw files."""
+                base = os.path.basename(path).lower()
+                norm = path.replace('\\', '/').lower()
+                score = 0
+
+                if kind == 'phins':
+                    if base in ('phins_ins.txt', 'phins ins.txt', 'phins_ins.csv', 'phins ins.csv'):
+                        score += 100
+                    elif 'phins' in base and 'ins' in base:
+                        score += 40
+                    if 'raw' in base:
+                        score -= 80
+                else:  # adcp
+                    if base in ('adcp.txt', 'adcp.csv'):
+                        score += 100
+                    elif 'adcp' in base:
+                        score += 40
+                    if 'baseline' in base or 'notx' in base:
+                        score -= 60
+
+                if base.endswith('.txt') or base.endswith('.csv'):
+                    score += 20
+                else:
+                    score -= 40
+
+                if '/exported/' in norm or '/logs/' in norm:
+                    score += 30
+                if '/config/' in norm:
+                    score -= 70
+
+                return score
 
             for root, _dirs, files in os.walk(nav_directory):
                 for file_name in files:
                     low = file_name.lower()
                     full_path = os.path.join(root, file_name)
-                    if phins_file is None and ('phins' in low and 'ins' in low):
-                        phins_file = full_path
-                    elif adcp_file is None and 'adcp' in low:
-                        adcp_file = full_path
+                    if 'phins' in low and 'ins' in low:
+                        phins_candidates.append(full_path)
+                    elif 'adcp' in low:
+                        adcp_candidates.append(full_path)
+
+            phins_file = max(phins_candidates, key=lambda p: _score_nav_candidate(p, 'phins')) if phins_candidates else None
+            adcp_file = max(adcp_candidates, key=lambda p: _score_nav_candidate(p, 'adcp')) if adcp_candidates else None
+
+            if phins_file:
+                print(f"Selected PHINS file: {phins_file}")
+            if adcp_file:
+                print(f"Selected ADCP file: {adcp_file}")
 
             if not phins_file:
                 print("No PHINS_INS navigation file found in navigation directory")
@@ -975,9 +1019,6 @@ class Metrics:
             Datetime object or None if parsing failed
         """
         try:
-            import datetime
-            from datetime import date
-            
             # Clean up the string
             mission_time_str = mission_time_str.strip()
             
@@ -992,13 +1033,14 @@ class Metrics:
                 hour, minute, second = map(int, mission_time_str.split(':'))
                 microsecond = 0
             
-            # Use today's date (or the date from image metadata if available)
-            # For now, use a fixed date that matches your dive data
-            # You may need to adjust this based on your actual dive date
-            dive_date = date(2025, 8, 12)  # Based on your image timestamps
+            # Prefer date inferred from image EXIF timestamps when available.
+            # Fall back to today's date if no reference date is known.
+            dive_date = self.nav_reference_date or self._extract_dive_date_from_gps_data()
+            if dive_date is None:
+                dive_date = date.today()
                 
             # Create datetime object
-            dt = datetime.datetime.combine(dive_date, datetime.time(hour, minute, second, microsecond))
+            dt = datetime.combine(dive_date, dt_time(hour, minute, second, microsecond))
             return dt
                 
         except Exception as e:
@@ -1234,6 +1276,7 @@ class Metrics:
 
             # Load navigation data after GPS extraction so we can use EXIF date as dive-date hint.
             dive_date = self._extract_dive_date_from_gps_data()
+            self.nav_reference_date = dive_date
             if nav_directory and os.path.isdir(nav_directory):
                 print(f"Loading navigation from directory: {nav_directory}")
                 self.load_nav_data_from_directory(nav_directory, dive_date=dive_date)
@@ -1285,6 +1328,9 @@ class Metrics:
             # Track navigation matching statistics
             nav_match_count = 0
             nav_miss_count = 0
+            nav_missing_datetime_count = 0
+            nav_filename_parse_fail_count = 0
+            nav_outside_tolerance_count = 0
             
             for i, gps_point in enumerate(self.gps_data):
                 if progress_callback and i % 100 == 0:
@@ -1327,6 +1373,7 @@ class Metrics:
                 # Try to get heading from navigation data if available
                 heading = ''
                 depth = ''
+                depth_value = None
                 nav_matched = False
                 
                 if hasattr(self, 'nav_timestamps') and self.nav_timestamps:
@@ -1335,6 +1382,26 @@ class Metrics:
                         if i < 3:
                             print(f"\nProcessing image #{i+1}: {filename}")
                             print(f"  datetime_original: {datetime_original}")
+
+                        # Diagnostics for why nav matching may fail.
+                        dt_from_exif = self._parse_image_datetime(datetime_original) if datetime_original else None
+                        dt_from_path = self._parse_image_datetime(file_path) if file_path else None
+
+                        if not datetime_original:
+                            nav_missing_datetime_count += 1
+
+                        if dt_from_exif is None and dt_from_path is None:
+                            nav_filename_parse_fail_count += 1
+                        else:
+                            has_tolerance_match = False
+                            for _cand_dt in (dt_from_exif, dt_from_path):
+                                if _cand_dt is None:
+                                    continue
+                                if self._find_closest_nav_entry(_cand_dt, tolerance_seconds=3.0) is not None:
+                                    has_tolerance_match = True
+                                    break
+                            if not has_tolerance_match:
+                                nav_outside_tolerance_count += 1
                         
                         if datetime_original:
                             heading = self.get_heading_from_nav(datetime_original)
@@ -1435,6 +1502,10 @@ class Metrics:
                 print(f"  Total images: {total_images}")
                 print(f"  Nav matched: {nav_match_count} ({match_rate:.1f}%)")
                 print(f"  Nav missed: {nav_miss_count} ({100-match_rate:.1f}%)")
+                print(f"  Miss diagnostics:")
+                print(f"    - Missing EXIF datetime: {nav_missing_datetime_count}")
+                print(f"    - Datetime parse failed (EXIF + filename/path): {nav_filename_parse_fail_count}")
+                print(f"    - Parsed datetime but no nav point within +/-3s: {nav_outside_tolerance_count}")
                 if nav_miss_count > 0:
                     print(f"  Note: Missing nav data may be due to timestamp mismatches")
             
