@@ -15,8 +15,9 @@ tests/*.tif
 tests/*.xyz
 *.xyz
 
-#Pycache files
-src/gui/__pycache__/*.pyc
-src/models/__pycache__/*.pyc
-src/utils/__pycache__/*.pyc
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
