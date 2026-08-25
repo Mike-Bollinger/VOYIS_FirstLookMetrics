@@ -314,6 +314,10 @@ class ProcessingController:
                     self.log_message(f"✗ LLS processing failed: {lls_error}")
                     self.log_message(f"Traceback: {traceback.format_exc()}")
             
+            # Track imagery failure count for the overall summary
+            imagery_failed_stages = 0
+            self._last_imagery_failed_stages = 0
+
             # Process imagery data if selected
             if imagery_selected:
                 if self.check_stop_flag():
@@ -357,10 +361,15 @@ class ProcessingController:
                         extract_gps=extract_gps
                     )
                     
-                    self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
+                    gps_count = len(self.metrics.gps_data)
+                    self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {gps_count} images")
                     
-                    # Metrics CSV will contain all GPS and EXIF data
-                    self.log_message("✓ Metrics CSV will contain all required GPS and EXIF data")
+                    if gps_count > 0:
+                        self.log_message("✓ Metrics CSV will contain GPS and EXIF data")
+                    else:
+                        self.log_message(f"⚠ No GPS data found in: {os.path.basename(input_folder)}")
+                        self.log_message(f"   Found: {self.metrics.processed_count} processed stills, {self.metrics.raw_count} raw images, {self.metrics.other_count} other files")
+                        self.log_message("   Verify Image_Input points to the folder containing processed JPEG images (ESC_stills_processed_*)")
                     
                 except Exception as metadata_error:
                     self.log_message(f"✗ Error extracting metadata: {metadata_error}")
@@ -516,6 +525,9 @@ class ProcessingController:
                     self.log_message(f"Failed: {failed_stages}")
                     self.log_message(f"Success rate: {(completed_stages/total_stages*100):.1f}%")
                     
+                    imagery_failed_stages = failed_stages
+                    self._last_imagery_failed_stages = failed_stages
+
                     if failed_stages == 0:
                         self.log_message("✓ All imagery processing completed successfully!")
                     else:
@@ -555,19 +567,29 @@ class ProcessingController:
             self.log_message(f"{'='*60}")
             
             if nav_selected:
-                self.log_message("Navigation Processing: Completed")
+                nav_status = "⚬ Skipped (batch)" if skip_nav_processing else "✓ Completed"
+                self.log_message(f"Navigation Processing: {nav_status}")
             if nav_to_shp_selected:
-                self.log_message("Nav Track Shapefile: Completed")
+                shp_status = "⚬ Skipped (batch)" if skip_nav_processing else "✓ Completed"
+                self.log_message(f"Nav Track Shapefile: {shp_status}")
             if turbidity_selected:
-                self.log_message("Turbidity Processing: Completed")
+                turb_status = "⚬ Skipped (batch)" if skip_nav_processing else "✓ Completed"
+                self.log_message(f"Turbidity Processing: {turb_status}")
             if lls_selected:
-                self.log_message("LLS Processing: Completed")
+                self.log_message("LLS Processing: ✓ Completed")
             if imagery_selected:
-                self.log_message("Imagery Processing: Completed")
+                if imagery_failed_stages == 0:
+                    self.log_message("Imagery Processing: ✓ Completed")
+                else:
+                    self.log_message(f"Imagery Processing: ✗ Failed ({imagery_failed_stages} stage(s) failed)")
             
             if total_processes > 0:
-                self.log_message("✓ All processing completed successfully!")
-                self.update_progress(100, "All processing completed")
+                if imagery_selected and imagery_failed_stages > 0:
+                    self.log_message(f"⚠ Processing completed with errors – imagery had {imagery_failed_stages} failed stage(s)")
+                    self.update_progress(100, f"Completed with {imagery_failed_stages} imagery error(s)")
+                else:
+                    self.log_message("✓ All processing completed successfully!")
+                    self.update_progress(100, "All processing completed")
             else:
                 self.log_message("⚠ No processing was performed")
                 self.update_progress(100, "No processing performed")
@@ -1840,15 +1862,24 @@ class ProcessingController:
                         # Check if processing was stopped during imagery processing
                         if self.check_stop_flag():
                             return False
-                            
-                        self.log_message(f"Job {job_num}: ✓ Imagery processing completed")
+
+                        imagery_fails = getattr(self, '_last_imagery_failed_stages', 0)
+                        if imagery_fails == 0:
+                            self.log_message(f"Job {job_num}: ✓ Imagery processing completed")
+                        else:
+                            self.log_message(f"Job {job_num}: ⚠ Imagery processing completed with {imagery_fails} stage failure(s)")
                 
                 # Check final stop flag
                 if self.check_stop_flag():
                     return False
-                
-                self.log_message(f"Job {job_num}: ✓ All processing completed successfully")
-                return True
+
+                imagery_fails = getattr(self, '_last_imagery_failed_stages', 0)
+                if imagery_fails == 0:
+                    self.log_message(f"Job {job_num}: ✓ All processing completed successfully")
+                    return True
+                else:
+                    self.log_message(f"Job {job_num}: ⚠ Processing completed with {imagery_fails} imagery stage failure(s)")
+                    return False
                 
             except Exception as processing_error:
                 self.log_message(f"Job {job_num}: ✗ Processing error: {processing_error}")
