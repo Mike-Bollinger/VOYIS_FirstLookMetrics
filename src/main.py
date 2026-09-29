@@ -3,6 +3,40 @@ import tkinter as tk
 import sys
 import traceback
 
+
+def configure_windows_app_id():
+    """Set a stable Windows AppUserModelID so taskbar icon follows app identity."""
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NOAA.VOYIS.FirstLookMetrics")
+    except Exception as e:
+        print(f"Warning: Could not set Windows AppUserModelID: {str(e)}")
+
+
+def set_root_icon(root):
+    """Set the application icon as early as possible."""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_dir = os.path.join(current_dir, "utils")
+        icon_candidates = [
+            "NOAA_Voyis_Logo.ico",
+            "NOAA_VOYIS_Logo.ico",
+            "NOAA_Logo.ico",
+        ]
+
+        for icon_name in icon_candidates:
+            icon_path = os.path.join(icon_dir, icon_name)
+            if os.path.exists(icon_path):
+                root.iconbitmap(icon_path)
+                return
+
+        print(f"Warning: No application icon found in {icon_dir}")
+    except Exception as e:
+        print(f"Warning: Could not set application icon: {str(e)}")
+
 def show_error_window(root, error_message):
     """Display an error window with the given message"""
     try:
@@ -22,6 +56,8 @@ def show_error_window(root, error_message):
 def main():
     # Wrap everything in a try/except
     try:
+        configure_windows_app_id()
+
         # Add the parent directory to the path to enable imports from sibling packages
         current_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(current_dir)
@@ -37,6 +73,7 @@ def main():
         # Create the root window before any imports that might use tkinter
         root = tk.Tk()
         root.title("VOYIS First Look Metrics")
+        set_root_icon(root)
         
         try:
             # Import the AppWindow class after adjusting the path

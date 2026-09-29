@@ -40,15 +40,21 @@ class AppWindow(UIComponents, ProcessingController):
     def set_window_icon(self):
         """Set the window icon using the NOAA logo"""
         try:
-            # Get the path to the NOAA logo
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            logo_path = os.path.join(current_dir, "..", "..", "src", "utils", "NOAA_VOYIS_Logo.ico")
-            logo_path = os.path.abspath(logo_path)
-            
-            if os.path.exists(logo_path):
-                self.root.iconbitmap(logo_path)
-            else:
-                print(f"Warning: NOAA logo not found at {logo_path}")
+            icon_dir = os.path.abspath(os.path.join(current_dir, "..", "..", "src", "utils"))
+            icon_candidates = [
+                "NOAA_Voyis_Logo.ico",
+                "NOAA_VOYIS_Logo.ico",
+                "NOAA_Logo.ico",
+            ]
+
+            for icon_name in icon_candidates:
+                logo_path = os.path.join(icon_dir, icon_name)
+                if os.path.exists(logo_path):
+                    self.root.iconbitmap(logo_path)
+                    return
+
+            print(f"Warning: NOAA logo not found in {icon_dir}")
         except Exception as e:
             print(f"Warning: Could not set window icon: {str(e)}")
 
@@ -782,6 +788,9 @@ class AppWindow(UIComponents, ProcessingController):
             else:
                 self.turb_merge_frame.grid_remove()
 
+        # Keep the imagery "All" checkbox in sync when toggled directly.
+        self.update_all_checkbox()
+
     def _detect_and_update_navdata_file(self, directory_path):
         """Recursively search for a Vehicle NavData text file and update the enunciator."""
         navdata_file = self.find_navdata_file(directory_path)
@@ -889,14 +898,16 @@ class AppWindow(UIComponents, ProcessingController):
         """Toggle all function checkboxes"""
         all_selected = self.all_var.get()
         
-        # Only toggle core imagery functions (not turbidity merge — that is opt-in)
+        # Toggle all imagery functions, including turbidity merge.
         self.basic_metrics_var.set(all_selected)
         self.location_map_var.set(all_selected)
         self.histogram_var.set(all_selected)
+        self.turbidity_merge_var.set(all_selected)
         self.footprint_map_var.set(all_selected)
         self.visibility_analyzer_var.set(all_selected)
         self.highlight_selector_var.set(all_selected)
         
+        self.toggle_turbidity_merge_options()
         self.toggle_visibility_options()
 
     def update_all_checkbox(self):
@@ -905,12 +916,12 @@ class AppWindow(UIComponents, ProcessingController):
             self.basic_metrics_var.get(),
             self.location_map_var.get(),
             self.histogram_var.get(),
+            self.turbidity_merge_var.get(),
             self.footprint_map_var.get(),
             self.visibility_analyzer_var.get(),
             self.highlight_selector_var.get()
         ]
-        
-        # turbidity_merge_var is intentionally excluded from the "All" state
+
         if all(imagery_functions):
             self.all_var.set(True)
         else:
