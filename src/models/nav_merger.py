@@ -168,7 +168,7 @@ class NavigationDataMerger:
         filename = os.path.basename(file_path).lower()
         
         # Check filename patterns first
-        if 'phins' in filename and 'ins' in filename:
+        if 'phins' in filename and ('ins' in filename or 'stdv2' in filename):
             return 'phins_ins'
         elif 'nav_state' in filename or filename == 'nav_state.txt':
             return 'nav_state'

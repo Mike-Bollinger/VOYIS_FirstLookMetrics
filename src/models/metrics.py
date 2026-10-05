@@ -505,9 +505,9 @@ class Metrics:
                 score = 0
 
                 if kind == 'phins':
-                    if base in ('phins_ins.txt', 'phins ins.txt', 'phins_ins.csv', 'phins ins.csv'):
+                    if base in ('phins_ins.txt', 'phins ins.txt', 'phins_ins.csv', 'phins ins.csv', 'phins_stdv2.csv'):
                         score += 100
-                    elif 'phins' in base and 'ins' in base:
+                    elif 'phins' in base and ('ins' in base or 'stdv2' in base):
                         score += 40
                     if 'raw' in base:
                         score -= 80
@@ -535,7 +535,7 @@ class Metrics:
                 for file_name in files:
                     low = file_name.lower()
                     full_path = os.path.join(root, file_name)
-                    if 'phins' in low and 'ins' in low:
+                    if 'phins' in low and ('ins' in low or 'stdv2' in low):
                         phins_candidates.append(full_path)
                     elif 'adcp' in low:
                         adcp_candidates.append(full_path)

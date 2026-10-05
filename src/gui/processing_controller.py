@@ -547,10 +547,19 @@ class ProcessingController:
 
                 metrics_csvs = glob.glob(os.path.join(output_folder, "*Image_Metrics.csv"))
                 if metrics_csvs:
+                    image_metrics_copy_dir = (
+                        self.image_metrics_shp_copy_dir.get()
+                        if hasattr(self, 'image_metrics_shp_copy_dir') else ''
+                    )
                     for csv_path in metrics_csvs:
                         success, msg = csv_to_shp(csv_path, log_fn=self.log_message)
                         if success:
                             self.log_message(f"✓ Shapefile updated: {os.path.basename(msg)}")
+
+                            # Optionally copy the Image_Metrics shapefile to a second location
+                            if image_metrics_copy_dir:
+                                from src.utils.file_utils import copy_shapefile_set
+                                copy_shapefile_set(msg, image_metrics_copy_dir, log_callback=self.log_message)
                         else:
                             self.log_message(f"⚠ Shapefile export skipped: {msg}")
                 else:
@@ -717,6 +726,16 @@ class ProcessingController:
 
             if success:
                 self.update_progress(21, "Nav shapefile export completed")
+
+                # Optionally copy the dissolved trackline shapefile to a second location
+                copy_dir = (
+                    self.dissolved_shp_copy_dir.get()
+                    if hasattr(self, 'dissolved_shp_copy_dir') else ''
+                )
+                if copy_dir:
+                    from src.utils.file_utils import copy_shapefile_set
+                    shp_path = os.path.join(output_folder, f"{dive_prefix}dissolved_navtrack.shp")
+                    copy_shapefile_set(shp_path, copy_dir, log_callback=self.log_message)
             else:
                 self.log_message("⚠ Nav track shapefile was not created")
 

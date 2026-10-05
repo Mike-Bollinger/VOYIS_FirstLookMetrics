@@ -104,6 +104,10 @@ class AppWindow(UIComponents, ProcessingController):
         # Nav track to shapefile variable
         self.nav_to_shp_var = tk.BooleanVar(value=True)
 
+        # Optional destination folders to copy final shapefiles to
+        self.dissolved_shp_copy_dir = tk.StringVar()
+        self.image_metrics_shp_copy_dir = tk.StringVar()
+
         # Processing function variables
         self.lls_processing_var = tk.BooleanVar(value=True)
         self.basic_metrics_var = tk.BooleanVar(value=True)
@@ -393,6 +397,25 @@ class AppWindow(UIComponents, ProcessingController):
         
         # Add output widgets to list
         self.input_widgets.extend([self.output_entry, self.output_button])
+
+        # Optional: copy dissolved trackline shapefile to a second location
+        ttk.Label(output_frame, text="Copy Dissolved Trackline Shapefile To (optional):").grid(row=1, column=0, sticky='w', pady=(8, 0))
+        self.dissolved_shp_copy_entry = ttk.Entry(output_frame, textvariable=self.dissolved_shp_copy_dir, width=40)
+        self.dissolved_shp_copy_entry.grid(row=1, column=1, padx=5, pady=(8, 0), sticky='ew')
+        self.dissolved_shp_copy_button = ttk.Button(output_frame, text="Browse...", command=self.select_dissolved_shp_copy_folder)
+        self.dissolved_shp_copy_button.grid(row=1, column=2, pady=(8, 0))
+
+        # Optional: copy Image_Metrics shapefile to a second location
+        ttk.Label(output_frame, text="Copy Image Metrics Shapefile To (optional):").grid(row=2, column=0, sticky='w', pady=(4, 0))
+        self.image_metrics_shp_copy_entry = ttk.Entry(output_frame, textvariable=self.image_metrics_shp_copy_dir, width=40)
+        self.image_metrics_shp_copy_entry.grid(row=2, column=1, padx=5, pady=(4, 0), sticky='ew')
+        self.image_metrics_shp_copy_button = ttk.Button(output_frame, text="Browse...", command=self.select_image_metrics_shp_copy_folder)
+        self.image_metrics_shp_copy_button.grid(row=2, column=2, pady=(4, 0))
+
+        self.input_widgets.extend([
+            self.dissolved_shp_copy_entry, self.dissolved_shp_copy_button,
+            self.image_metrics_shp_copy_entry, self.image_metrics_shp_copy_button,
+        ])
 
     def create_functions_section(self):
         """Create the functions selection checkbox widgets"""
@@ -707,6 +730,20 @@ class AppWindow(UIComponents, ProcessingController):
         if folder_path:
             self.output_path.set(folder_path)
             self.log_message(f"Output folder set to: {folder_path}")
+
+    def select_dissolved_shp_copy_folder(self):
+        """Select optional destination folder to copy the dissolved trackline shapefile to"""
+        folder_path = filedialog.askdirectory(title="Select Folder to Copy Dissolved Trackline Shapefile To")
+        if folder_path:
+            self.dissolved_shp_copy_dir.set(folder_path)
+            self.log_message(f"Dissolved trackline shapefile copy destination set to: {folder_path}")
+
+    def select_image_metrics_shp_copy_folder(self):
+        """Select optional destination folder to copy the Image_Metrics shapefile to"""
+        folder_path = filedialog.askdirectory(title="Select Folder to Copy Image Metrics Shapefile To")
+        if folder_path:
+            self.image_metrics_shp_copy_dir.set(folder_path)
+            self.log_message(f"Image Metrics shapefile copy destination set to: {folder_path}")
 
     def select_nav_file(self):
         """Select vehicle navigation file"""

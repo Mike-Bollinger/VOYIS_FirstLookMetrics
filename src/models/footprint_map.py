@@ -82,7 +82,7 @@ class FootprintMap:
 
         for root, _dirs, files in os.walk(nav_directory):
             for fname in sorted(files):
-                if not fname.lower().endswith('.txt'):
+                if not fname.lower().endswith(('.txt', '.csv')):
                     continue
                 fpath = os.path.join(root, fname)
                 try:

@@ -66,6 +66,70 @@ def check_image_file_type(file_name):
     valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
     return any(file_name.lower().endswith(ext) for ext in valid_extensions)
 
+def copy_shapefile_set(shp_path, dest_dir, log_callback=None):
+    """
+    Copy an ESRI Shapefile and all of its sidecar component files to a
+    destination directory.
+
+    Args:
+        shp_path: Path to the .shp file
+        dest_dir: Destination directory (created if it doesn't exist)
+        log_callback: Optional callback function for logging messages
+
+    Returns:
+        List of destination file paths that were copied, or an empty list
+        if nothing was copied.
+    """
+    import os
+    import shutil
+
+    def log(message):
+        if log_callback:
+            log_callback(message)
+        else:
+            print(message)
+
+    if not shp_path or not os.path.exists(shp_path):
+        log(f"⚠ Shapefile not found, skipping copy: {shp_path}")
+        return []
+
+    if not dest_dir:
+        return []
+
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+    except Exception as e:
+        log(f"✗ Could not create destination folder {dest_dir}: {e}")
+        return []
+
+    # Common ESRI Shapefile sidecar extensions
+    sidecar_extensions = [
+        '.shp', '.shx', '.dbf', '.prj', '.cpg', '.sbn', '.sbx',
+        '.fbn', '.fbx', '.ain', '.aih', '.ixs', '.mxs', '.atx', '.shp.xml'
+    ]
+
+    src_dir = os.path.dirname(shp_path)
+    stem = os.path.splitext(os.path.basename(shp_path))[0]
+
+    copied_paths = []
+    for ext in sidecar_extensions:
+        src_file = os.path.join(src_dir, stem + ext)
+        if os.path.exists(src_file):
+            dest_file = os.path.join(dest_dir, os.path.basename(src_file))
+            try:
+                shutil.copy2(src_file, dest_file)
+                copied_paths.append(dest_file)
+            except Exception as e:
+                log(f"✗ Could not copy {os.path.basename(src_file)}: {e}")
+
+    if copied_paths:
+        log(f"✓ Copied {len(copied_paths)} shapefile component(s) to: {dest_dir}")
+    else:
+        log(f"⚠ No shapefile components found to copy for: {os.path.basename(shp_path)}")
+
+    return copied_paths
+
+
 def convert_csv_to_shapefile(csv_path, output_shapefile_path=None, log_callback=None):
     """
     Convert Image_Metrics.csv to ESRI Shapefile format
