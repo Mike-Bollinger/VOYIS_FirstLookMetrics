@@ -17,6 +17,8 @@ tests/*.xyz
 
 # Python cache files
 __pycache__/
+src/models/__pycache__/
+src/utils/__pycache__/
 *.pyc
 *.pyo
 *.pyd
