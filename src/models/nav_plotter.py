@@ -1679,10 +1679,11 @@ class NavPlotter:
             df_with_bathymetry['bathymetry'] = df_with_bathymetry['depth'] + df_with_bathymetry['altitude']
             
             if len(df_with_bathymetry) > 0:
+                # Use the custom bathymetry palette (shallow warm -> deep navy)
                 scatter, cbar = self._create_depth_colored_scatter(
                     plt.gca(), df_with_bathymetry['longitude'], df_with_bathymetry['latitude'], 
                     df_with_bathymetry['bathymetry'],
-                    colormap='turbo_r', size=5, alpha=0.8,
+                    colormap='bathy', size=5, alpha=0.8,
                     add_colorbar=True, colorbar_label='Bathymetry (m)',
                     log_scale=False
                 )
@@ -2405,6 +2406,25 @@ class NavPlotter:
             scatter plot object and colorbar (if created)
         """
         from matplotlib.colors import Normalize
+        import matplotlib.colors as mcolors
+
+        # Support a custom bathymetry colormap that goes from shallow (warm/yellow)
+        # to deep (deep navy). The colormap list is ordered from low (shallow)
+        # to high (deep) so that deeper values map to deeper blues.
+        cmap = colormap
+        if isinstance(colormap, str) and colormap.lower().startswith('bathy'):
+            try:
+                bathy_colors = [
+                    '#ffd166',  # shallow: warm yellow
+                    '#ff7f50',  # orange
+                    '#d43f57',  # warm red
+                    '#8a2be2',  # purple
+                    '#2f4b7c',  # indigo
+                    '#001f3f',  # deep navy
+                ]
+                cmap = mcolors.LinearSegmentedColormap.from_list('bathy_cmap', bathy_colors, N=256)
+            except Exception:
+                cmap = colormap
         
         # Handle depth data preparation
         depth_values = depth_data.copy()
@@ -2428,7 +2448,7 @@ class NavPlotter:
             depth_scaled = depth_normalized ** exponent
             
             # Create the scatter plot with exponentially scaled colors
-            scatter = ax.scatter(x_data, y_data, c=depth_scaled, cmap=colormap, 
+            scatter = ax.scatter(x_data, y_data, c=depth_scaled, cmap=cmap, 
                                s=size, alpha=alpha, vmin=0, vmax=1)
             
             if add_colorbar:
@@ -2456,9 +2476,21 @@ class NavPlotter:
                 cbar.set_ticks(depth_tick_scaled)
                 cbar.set_ticklabels([f'{d:.1f}' for d in depth_tick_values])
         else:
-            # Use linear scaling
-            scatter = ax.scatter(x_data, y_data, c=depth_values, cmap=colormap, 
-                               s=size, alpha=alpha)
+            # Use linear scaling with explicit normalization so colormap mapping
+            # is consistent (small -> first color, large -> last color).
+            try:
+                min_depth = float(np.nanmin(depth_values))
+                max_depth = float(np.nanmax(depth_values))
+            except Exception:
+                min_depth, max_depth = None, None
+
+            if min_depth is not None and max_depth is not None and max_depth > min_depth:
+                norm = Normalize(vmin=min_depth, vmax=max_depth)
+                scatter = ax.scatter(x_data, y_data, c=depth_values, cmap=cmap,
+                                   norm=norm, s=size, alpha=alpha)
+            else:
+                scatter = ax.scatter(x_data, y_data, c=depth_values, cmap=cmap,
+                                   s=size, alpha=alpha)
             
             if add_colorbar:
                 cbar_kwargs = {}

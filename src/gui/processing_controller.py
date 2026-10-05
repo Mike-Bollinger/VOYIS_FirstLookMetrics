@@ -341,23 +341,38 @@ class ProcessingController:
                 try:
                     self.log_message("Extracting image metadata...")
                     
-                    # Always extract GPS data for other stages
-                    extract_gps = True
+                    # Check for an existing master CSV before scanning every image on
+                    # disk - if it's already current, reuse it instead of re-reading
+                    # GPS/EXIF data from potentially tens of thousands of images.
+                    dive_prefix_for_csv = self.dive_prefix_image if hasattr(self, 'dive_prefix_image') and self.dive_prefix_image else "Image_"
+                    master_csv_path = os.path.join(output_folder, f"{dive_prefix_for_csv}Metrics.csv")
                     
-                    # Create a progress callback that reports to the main log
-                    def metadata_progress(progress_pct, message):
-                        # Update progress every 10% or on important messages
-                        if progress_pct % 10 == 0 or "GPS data from" in message or "files" in message:
-                            self.log_message(f"[{progress_pct:.0f}%] {message}")
-                        return True  # Continue processing (don't check stop flag here to avoid repeated messages)
+                    used_cached_csv = False
+                    if os.path.exists(master_csv_path):
+                        self.log_message(f"Found existing master CSV: {os.path.basename(master_csv_path)} - checking if it's current...")
+                        disk_processed_count = self.metrics.count_processed_images_on_disk(input_folder)
+                        if self.metrics.load_gps_data_from_csv(master_csv_path) and len(self.metrics.gps_data) >= disk_processed_count:
+                            used_cached_csv = True
+                            self.metrics.scan_raw_and_other_file_counts(input_folder)
+                            self.log_message(f"✓ Reusing GPS/EXIF data from master CSV ({len(self.metrics.gps_data)} images) - skipping image re-scan")
+                        else:
+                            self.log_message("⚠ Master CSV is missing images found on disk - performing full scan")
                     
-                    processed_files, results = self.metrics.analyze_directory(
-                        input_folder,
-                        progress_callback=metadata_progress,
-                        extract_gps=extract_gps
-                    )
-                    
-                    self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
+                    if not used_cached_csv:
+                        # Create a progress callback that reports to the main log
+                        def metadata_progress(progress_pct, message):
+                            # Update progress every 10% or on important messages
+                            if progress_pct % 10 == 0 or "GPS data from" in message or "files" in message:
+                                self.log_message(f"[{progress_pct:.0f}%] {message}")
+                            return True  # Continue processing (don't check stop flag here to avoid repeated messages)
+                        
+                        processed_files, results = self.metrics.analyze_directory(
+                            input_folder,
+                            progress_callback=metadata_progress,
+                            extract_gps=True
+                        )
+                        
+                        self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
                     
                     # Metrics CSV will contain all GPS and EXIF data
                     self.log_message("✓ Metrics CSV will contain all required GPS and EXIF data")
@@ -853,25 +868,31 @@ class ProcessingController:
                 return False
             
             try:
-                # OPTIMIZATION: Skip GPS extraction if we already have it from CSV creation
-                # This prevents redundant EXIF reading of 70k+ images
-                already_have_gps = hasattr(self.metrics, 'gps_data') and len(self.metrics.gps_data) > 0
+                # OPTIMIZATION: The initial metadata extraction pass (before STEP 1)
+                # already walked the whole directory and read EXIF/GPS data from
+                # every image once. Reuse those cached counts/gps_data here instead
+                # of re-walking the directory and re-opening every image, which
+                # was doubling the EXIF read time on large datasets.
+                already_analyzed = (
+                    hasattr(self.metrics, 'gps_data')
+                    and (self.metrics.processed_count + self.metrics.raw_count + self.metrics.other_count) > 0
+                )
                 
-                # Only extract GPS if we need it AND don't already have it
-                extract_gps = False
-                if not already_have_gps:
+                if already_analyzed:
+                    processed_files = self.metrics.processed_count + self.metrics.raw_count + self.metrics.other_count
+                    results = self.metrics.get_summary_report()
+                else:
                     extract_gps = any([
                         self.location_map_var.get(), 
                         self.histogram_var.get(),
                         self.footprint_map_var.get(), 
                         self.visibility_analyzer_var.get()
                     ])
-                
-                processed_files, results = self.metrics.analyze_directory(
-                    input_folder,
-                    progress_callback=None,  # Skip progress for batch processing
-                    extract_gps=extract_gps
-                )
+                    processed_files, results = self.metrics.analyze_directory(
+                        input_folder,
+                        progress_callback=None,  # Skip progress for batch processing
+                        extract_gps=extract_gps
+                    )
                 
                 # Log the summary results
                 for line in results:
