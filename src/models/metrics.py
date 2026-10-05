@@ -120,9 +120,26 @@ class Metrics:
                     self.processed_count += 1
                     self.processed_size += file_size
                     file_type = "processed"
-                    
-                    # Determine processing type for processed images
-                    processing_type = self.determine_processing_type(file_path)
+
+                    # Extract GPS data from processed images only. This also determines
+                    # the processing type from the same EXIF read, so we avoid opening
+                    # each image twice (once for type, once for GPS).
+                    gps_info = None
+                    is_image = file.lower().endswith(('.jpg', '.jpeg', '.tiff', '.tif', '.png'))
+                    if extract_gps and is_image:
+                        try:
+                            gps_info = self.extract_gps_from_image(file_path)
+                        except Exception as e:
+                            if progress_callback:
+                                progress_callback(progress, f"Could not extract GPS data from {file}: {str(e)}")
+
+                    if gps_info is not None:
+                        processing_type = gps_info.get('processing_type', 'unknown')
+                    else:
+                        # No GPS extraction happened for this file - fall back to a
+                        # single dedicated EXIF read to classify processing type.
+                        processing_type = self.determine_processing_type(file_path)
+
                     if processing_type == 'auv':
                         self.auv_processed_count += 1
                         self.auv_processed_size += file_size
@@ -139,20 +156,13 @@ class Metrics:
                     # Report milestones
                     if self.processed_count % 100 == 0 and progress_callback:
                         progress_callback(progress, f"Found {self.processed_count} processed images so far...")
-                    
-                    # Extract GPS data from processed images only
-                    if extract_gps and file.lower().endswith(('.jpg', '.jpeg', '.tiff', '.tif', '.png')):
-                        try:
-                            gps_info = self.extract_gps_from_image(file_path)
-                            if gps_info:
-                                gps_info['file_type'] = file_type
-                                gps_info['filename'] = file
-                                self.gps_data.append(gps_info)
-                                if len(self.gps_data) % 100 == 0 and progress_callback:
-                                    progress_callback(progress, f"Extracted GPS data from {len(self.gps_data)} processed images so far...")
-                        except Exception as e:
-                            if progress_callback:
-                                progress_callback(progress, f"Could not extract GPS data from {file}: {str(e)}")
+
+                    if gps_info is not None:
+                        gps_info['file_type'] = file_type
+                        gps_info['filename'] = file
+                        self.gps_data.append(gps_info)
+                        if len(self.gps_data) % 100 == 0 and progress_callback:
+                            progress_callback(progress, f"Extracted GPS data from {len(self.gps_data)} processed images so far...")
                 
                 elif self.raw_pattern.search(file):
                     self.raw_count += 1
@@ -1652,6 +1662,127 @@ class Metrics:
             print(f"Error updating CSV with highlight data: {e}")
             return False
         
+    def count_processed_images_on_disk(self, input_folder: str) -> int:
+        """
+        Count processed image files currently on disk without opening them.
+        Used to validate whether a cached master CSV is still up to date.
+        """
+        count = 0
+        for root, _, files in os.walk(input_folder):
+            for file in files:
+                if self.processed_pattern.search(file) and file.lower().endswith(
+                    ('.jpg', '.jpeg', '.tiff', '.tif', '.png')
+                ):
+                    count += 1
+        return count
+
+    def scan_raw_and_other_file_counts(self, input_folder: str) -> None:
+        """
+        Populate raw_count/raw_size/other_count/other_size by walking the directory
+        and checking filenames/sizes only (no image opens). Used to fill in the
+        totals that a cached master CSV load can't provide, since raw/other files
+        never have GPS data extracted from them.
+        """
+        self.raw_count = 0
+        self.raw_size = 0
+        self.other_count = 0
+        self.other_size = 0
+        for root, _, files in os.walk(input_folder):
+            for file in files:
+                if self.processed_pattern.search(file):
+                    continue
+                file_path = os.path.join(root, file)
+                file_size = os.path.getsize(file_path)
+                if self.raw_pattern.search(file):
+                    self.raw_count += 1
+                    self.raw_size += file_size
+                else:
+                    self.other_count += 1
+                    self.other_size += file_size
+
+    def load_gps_data_from_csv(self, csv_path: str) -> bool:
+        """
+        Load previously extracted GPS/EXIF data from an existing master Image_Metrics.csv
+        so we can reuse it instead of re-reading every image from disk.
+
+        Returns:
+            True if data was loaded successfully, False otherwise
+        """
+        try:
+            import pandas as pd
+
+            if not os.path.exists(csv_path):
+                return False
+
+            df = pd.read_csv(csv_path)
+            if df.empty or 'filename' not in df.columns:
+                return False
+
+            # Map master CSV column names back to the keys used internally in gps_data
+            column_map = {
+                'exposure_time': 'ExposureTime',
+                'f_number': 'FNumber',
+                'focal_length': 'FocalLength',
+                'subject_distance': 'SubjectDistance',
+                'datetime_original': 'DateTime',
+                'image_width': 'width',
+                'image_height': 'height',
+            }
+
+            gps_data = []
+            auv_count = viewls_count = unknown_count = 0
+            auv_size = viewls_size = unknown_size = 0
+            processed_size = 0
+
+            for _, row in df.iterrows():
+                entry = {
+                    'filename': row.get('filename', ''),
+                    'file_path': row.get('file_path', ''),
+                }
+                for col in ('latitude', 'longitude', 'altitude', 'processing_type', 'software'):
+                    if col in df.columns and pd.notna(row.get(col)):
+                        entry[col] = row.get(col)
+                for csv_col, key in column_map.items():
+                    if csv_col in df.columns and pd.notna(row.get(csv_col)):
+                        entry[key] = row.get(csv_col)
+
+                file_path = entry.get('file_path', '')
+                file_size = 0
+                if file_path and os.path.exists(file_path):
+                    try:
+                        file_size = os.path.getsize(file_path)
+                    except OSError:
+                        file_size = 0
+
+                processed_size += file_size
+                processing_type = entry.get('processing_type', 'unknown')
+                if processing_type == 'auv':
+                    auv_count += 1
+                    auv_size += file_size
+                elif processing_type == 'viewls':
+                    viewls_count += 1
+                    viewls_size += file_size
+                else:
+                    unknown_count += 1
+                    unknown_size += file_size
+
+                gps_data.append(entry)
+
+            self.gps_data = gps_data
+            self.processed_count = len(gps_data)
+            self.processed_size = processed_size
+            self.auv_processed_count = auv_count
+            self.auv_processed_size = auv_size
+            self.viewls_processed_count = viewls_count
+            self.viewls_processed_size = viewls_size
+            self.unknown_processed_count = unknown_count
+            self.unknown_processed_size = unknown_size
+            return True
+
+        except Exception as e:
+            print(f"Error loading GPS data from master CSV {csv_path}: {e}")
+            return False
+
     def ensure_gps_data_available(self, input_folder: str, progress_callback: Callable = None) -> bool:
         """
         Ensure GPS data is available by extracting it if not already present
