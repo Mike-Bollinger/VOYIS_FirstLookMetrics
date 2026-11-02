@@ -17,8 +17,14 @@ Handles time-based merging and column standardization across different file form
 import pandas as pd
 import numpy as np
 import os
+import re
 import traceback
 from .metrics import Metrics
+
+# "phins" always contains "ins" as its last three letters (p-h-INS), so a
+# naive `'ins' in name` check matches every phins_* file including raw/std
+# logs. Require "ins" (or "stdv2") to appear as its own token after "phins".
+_PHINS_INS_PATTERN = re.compile(r'phins[\s_]*(ins|stdv2)')
 
 
 class NavigationDataMerger:
@@ -168,7 +174,7 @@ class NavigationDataMerger:
         filename = os.path.basename(file_path).lower()
         
         # Check filename patterns first
-        if 'phins' in filename and ('ins' in filename or 'stdv2' in filename):
+        if _PHINS_INS_PATTERN.search(filename):
             return 'phins_ins'
         elif 'nav_state' in filename or filename == 'nav_state.txt':
             return 'nav_state'
@@ -1097,8 +1103,11 @@ class NavigationDataMerger:
         
         log_message(f"Scanning directory for navigation files: {directory_path}")
         
-        # Common navigation file extensions
-        nav_extensions = ['.txt', '.csv', '.dat', '.log', '.nav', '.phins']
+        # Common navigation file extensions. Deliberately excludes .dat/.log:
+        # those are raw/std PHINS dumps or other binary-ish logs that aren't
+        # usable as generic delimited nav data (see Metrics.load_nav_data_from_directory
+        # for the dedicated last-resort phins_std.log parser).
+        nav_extensions = ['.txt', '.csv', '.nav', '.phins']
 
         # Subdirectory names to skip — these contain config, raw bags, or system files
         # rather than exported navigation data. Comparison is case-insensitive.

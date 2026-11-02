@@ -362,7 +362,6 @@ class ProcessingController:
                         else:
                             self.log_message("⚠ Master CSV is missing images found on disk - performing full scan")
                     
-<<<<<<< HEAD
                     if not used_cached_csv:
                         # Create a progress callback that reports to the main log
                         def metadata_progress(progress_pct, message):
@@ -378,16 +377,8 @@ class ProcessingController:
                         )
                         
                         self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {len(self.metrics.gps_data)} images")
-=======
-                    processed_files, results = self.metrics.analyze_directory(
-                        input_folder,
-                        progress_callback=metadata_progress,
-                        extract_gps=extract_gps
-                    )
                     
                     gps_count = len(self.metrics.gps_data)
-                    self.log_message(f"✓ Processed {processed_files} files, extracted GPS from {gps_count} images")
->>>>>>> 6de16670fa0fa000b7b73d33915488f4075ef838
                     
                     if gps_count > 0:
                         self.log_message("✓ Metrics CSV will contain GPS and EXIF data")

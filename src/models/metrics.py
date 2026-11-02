@@ -1,13 +1,45 @@
 import os
 import re
 from typing import Dict, List, Tuple, Callable, Optional
-from datetime import date, datetime, time as dt_time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 try:
     from PIL import Image
     from PIL.ExifTags import TAGS, GPSTAGS
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# Navigation directory search policy (shared by load_nav_data_from_directory)
+# ---------------------------------------------------------------------------
+# Extensions that are never considered navigation data (config/metadata/raw
+# dumps that happen to live alongside the vehicle's exported nav text files).
+_NAV_IGNORED_EXTENSIONS = {'.dat', '.yaml', '.yml', '.out', '.rlf', '.rmf', '.ini'}
+
+# "phins" always contains "ins" as its last three letters (p-h-INS), so a
+# naive `'ins' in name` check matches every phins_* file including raw/std
+# logs. Require "ins" (or "stdv2") to appear as its own token after "phins".
+_PHINS_INS_PATTERN = re.compile(r'phins[\s_]*(ins|stdv2)')
+
+
+def _is_ignored_nav_file(filename_lower: str) -> bool:
+    """Files that should never be treated as navigation data, regardless of keyword matches."""
+    _, ext = os.path.splitext(filename_lower)
+    if ext in _NAV_IGNORED_EXTENSIONS:
+        return True
+    if filename_lower.endswith('_remus.log'):
+        return True
+    if 'phins_raw' in filename_lower:
+        return True
+    return False
+
+
+def _is_phins_std_log_candidate(filename_lower: str) -> bool:
+    """Last-resort PHINS Standard v2 NMEA log (phins_std.*) - slow to parse, used only if nothing else is found."""
+    if 'phins_raw' in filename_lower:
+        return False
+    return 'phins' in filename_lower and 'std' in filename_lower
+
 
 class Metrics:
     def __init__(self, altitude_threshold=9.0):
@@ -507,6 +539,8 @@ class Metrics:
 
             phins_candidates = []
             adcp_candidates = []
+            phins_std_log_candidates = []
+            ignored_count = 0
 
             def _score_nav_candidate(path, kind):
                 """Score nav file candidates so we prefer exported runtime data over config/raw files."""
@@ -517,10 +551,8 @@ class Metrics:
                 if kind == 'phins':
                     if base in ('phins_ins.txt', 'phins ins.txt', 'phins_ins.csv', 'phins ins.csv', 'phins_stdv2.csv'):
                         score += 100
-                    elif 'phins' in base and ('ins' in base or 'stdv2' in base):
+                    elif _PHINS_INS_PATTERN.search(base):
                         score += 40
-                    if 'raw' in base:
-                        score -= 80
                 else:  # adcp
                     if base in ('adcp.txt', 'adcp.csv'):
                         score += 100
@@ -545,10 +577,27 @@ class Metrics:
                 for file_name in files:
                     low = file_name.lower()
                     full_path = os.path.join(root, file_name)
-                    if 'phins' in low and ('ins' in low or 'stdv2' in low):
+
+                    if _is_ignored_nav_file(low):
+                        ignored_count += 1
+                        continue
+
+                    if _is_phins_std_log_candidate(low):
+                        phins_std_log_candidates.append(full_path)
+                        continue
+
+                    # Primary sources are text/CSV exports only - raw/std logs
+                    # are handled separately as a last resort above.
+                    if not (low.endswith('.txt') or low.endswith('.csv')):
+                        continue
+
+                    if _PHINS_INS_PATTERN.search(low):
                         phins_candidates.append(full_path)
                     elif 'adcp' in low:
                         adcp_candidates.append(full_path)
+
+            if ignored_count:
+                print(f"Ignored {ignored_count} non-navigation file(s) while scanning {nav_directory}")
 
             phins_file = max(phins_candidates, key=lambda p: _score_nav_candidate(p, 'phins')) if phins_candidates else None
             adcp_file = max(adcp_candidates, key=lambda p: _score_nav_candidate(p, 'adcp')) if adcp_candidates else None
@@ -557,10 +606,6 @@ class Metrics:
                 print(f"Selected PHINS file: {phins_file}")
             if adcp_file:
                 print(f"Selected ADCP file: {adcp_file}")
-
-            if not phins_file:
-                print("No PHINS_INS navigation file found in navigation directory")
-                return False
 
             def _read_nav_csv(path):
                 loaders = [
@@ -584,17 +629,50 @@ class Metrics:
                         return col_map[name]
                 return None
 
+            # Thresholds to recognize Unix epoch time (vs. seconds/ms since midnight).
+            # 1e9 seconds ~= 2001-09-09, safely below any realistic mission date and
+            # far above the max possible seconds-since-midnight value (172800 = 2 days).
+            UNIX_EPOCH_SECONDS_MIN = 1_000_000_000
+            UNIX_EPOCH_MS_MIN = UNIX_EPOCH_SECONDS_MIN * 1000
+
             def _to_seconds(series):
+                """Convert a raw nav time column to seconds, detecting the format.
+
+                Returns (seconds, is_epoch) where is_epoch indicates the values are
+                Unix epoch seconds (absolute time) rather than seconds/ms since
+                midnight of the dive date (relative time).
+                """
                 values = pd.to_numeric(series, errors='coerce')
                 valid = values.dropna()
                 if valid.empty:
-                    return values
-                # Most nav files provide ms since midnight; convert when values are too large for seconds.
-                if valid.abs().max() > 172800:
-                    return values / 1000.0
-                return values
+                    return values, False
 
-            phins_df = _read_nav_csv(phins_file)
+                max_abs = valid.abs().max()
+
+                if max_abs >= UNIX_EPOCH_MS_MIN:
+                    return values / 1000.0, True
+                if max_abs >= UNIX_EPOCH_SECONDS_MIN:
+                    return values, True
+
+                # Most nav files provide ms since midnight; convert when values are too large for seconds.
+                if max_abs > 172800:
+                    return values / 1000.0, False
+                return values, False
+
+            if phins_file:
+                phins_df = _read_nav_csv(phins_file)
+            elif phins_std_log_candidates:
+                # Last resort: no PHINS_INS/ADCP text export found - parse the raw
+                # NMEA-style PHINS Standard v2 log instead (slow, downsampled).
+                print("No PHINS_INS text export found - falling back to PHINS Std v2 log (last resort)")
+                from src.models.phins_std_log import parse_phins_std_log
+                phins_df = parse_phins_std_log(phins_std_log_candidates[0], fallback_date=dive_date)
+            else:
+                phins_df = None
+
+            if phins_df is None or phins_df.empty:
+                print("No PHINS_INS navigation file found in navigation directory")
+                return False
 
             phins_time_col = _pick_column(phins_df.columns, ['time', 'mission_msecs', 'phins_time'])
             heading_col = _pick_column(phins_df.columns, ['heading', 'phins_heading', 'heading_degs', 'compass_heading'])
@@ -603,8 +681,15 @@ class Metrics:
                 print("PHINS file missing required time/heading columns")
                 return False
 
-            phins_seconds = _to_seconds(phins_df[phins_time_col])
+            phins_seconds, phins_is_epoch = _to_seconds(phins_df[phins_time_col])
+            if phins_is_epoch:
+                print(f"Detected Unix epoch time format in PHINS column '{phins_time_col}'")
             phins_heading = pd.to_numeric(phins_df[heading_col], errors='coerce')
+
+            phins_altitude_raw = (
+                pd.to_numeric(phins_df['altitude'], errors='coerce')
+                if 'altitude' in phins_df.columns else None
+            )
 
             valid_phins = phins_seconds.notna() & phins_heading.notna()
             if valid_phins.sum() == 0:
@@ -613,6 +698,8 @@ class Metrics:
 
             phins_seconds = phins_seconds[valid_phins].astype(float)
             phins_heading = phins_heading[valid_phins].astype(float).apply(self.normalize_heading)
+            if phins_altitude_raw is not None:
+                phins_altitude_raw = phins_altitude_raw[valid_phins].astype(float)
 
             interp_altitudes = np.full(len(phins_seconds), np.nan, dtype=float)
             interp_depths = np.full(len(phins_seconds), np.nan, dtype=float)
@@ -625,38 +712,49 @@ class Metrics:
                     adcp_depth_col = _pick_column(adcp_df.columns, ['depth', 'depth_m'])
 
                     if adcp_time_col and adcp_alt_col:
-                        adcp_seconds = _to_seconds(adcp_df[adcp_time_col])
-                        adcp_alt = pd.to_numeric(adcp_df[adcp_alt_col], errors='coerce')
-                        adcp_depth = pd.to_numeric(adcp_df[adcp_depth_col], errors='coerce') if adcp_depth_col else None
+                        adcp_seconds, adcp_is_epoch = _to_seconds(adcp_df[adcp_time_col])
+                        if adcp_is_epoch != phins_is_epoch:
+                            print("Warning: ADCP and PHINS time formats differ (epoch vs. relative) - altitude/depth interpolation skipped")
+                        else:
+                            adcp_alt = pd.to_numeric(adcp_df[adcp_alt_col], errors='coerce')
+                            adcp_depth = pd.to_numeric(adcp_df[adcp_depth_col], errors='coerce') if adcp_depth_col else None
 
-                        valid_adcp = adcp_seconds.notna() & adcp_alt.notna() & (adcp_alt > 0)
-                        if valid_adcp.sum() >= 2:
-                            x = adcp_seconds[valid_adcp].astype(float).values
-                            y = adcp_alt[valid_adcp].astype(float).values
-                            order = np.argsort(x)
-                            x = x[order]
-                            y = y[order]
-                            xp = phins_seconds.values
-                            interp_altitudes = np.interp(xp, x, y, left=np.nan, right=np.nan)
+                            valid_adcp = adcp_seconds.notna() & adcp_alt.notna() & (adcp_alt > 0)
+                            if valid_adcp.sum() >= 2:
+                                x = adcp_seconds[valid_adcp].astype(float).values
+                                y = adcp_alt[valid_adcp].astype(float).values
+                                order = np.argsort(x)
+                                x = x[order]
+                                y = y[order]
+                                xp = phins_seconds.values
+                                interp_altitudes = np.interp(xp, x, y, left=np.nan, right=np.nan)
 
-                            if adcp_depth is not None:
-                                valid_depth = adcp_seconds.notna() & adcp_depth.notna()
-                                if valid_depth.sum() >= 2:
-                                    dx = adcp_seconds[valid_depth].astype(float).values
-                                    dy = adcp_depth[valid_depth].astype(float).values
-                                    dorder = np.argsort(dx)
-                                    dx = dx[dorder]
-                                    dy = dy[dorder]
-                                    interp_depths = np.interp(xp, dx, dy, left=np.nan, right=np.nan)
+                                if adcp_depth is not None:
+                                    valid_depth = adcp_seconds.notna() & adcp_depth.notna()
+                                    if valid_depth.sum() >= 2:
+                                        dx = adcp_seconds[valid_depth].astype(float).values
+                                        dy = adcp_depth[valid_depth].astype(float).values
+                                        dorder = np.argsort(dx)
+                                        dx = dx[dorder]
+                                        dy = dy[dorder]
+                                        interp_depths = np.interp(xp, dx, dy, left=np.nan, right=np.nan)
                 except Exception as e:
                     print(f"Warning: Could not load ADCP altitude data: {e}")
+            elif phins_altitude_raw is not None:
+                # No separate ADCP export - use altitude parsed directly from the
+                # PHINS Std v2 log (DVL distance-to-bottom sentences).
+                interp_altitudes = phins_altitude_raw.values
+                print("Using altitude parsed directly from PHINS Std v2 log (no separate ADCP export found)")
 
             base_date = dive_date if dive_date is not None else date.today()
             base_dt = datetime.combine(base_date, dt_time.min)
 
             self.nav_timestamps = []
             for sec, alt, dep, hdg in zip(phins_seconds.values, interp_altitudes, interp_depths, phins_heading.values):
-                ts = base_dt + timedelta(seconds=float(sec))
+                if phins_is_epoch:
+                    ts = datetime.fromtimestamp(float(sec), tz=timezone.utc).replace(tzinfo=None)
+                else:
+                    ts = base_dt + timedelta(seconds=float(sec))
                 alt_value = None if np.isnan(alt) else float(alt)
                 depth_value = None if np.isnan(dep) else float(dep)
                 self.nav_timestamps.append((ts, alt_value, depth_value, float(hdg)))
